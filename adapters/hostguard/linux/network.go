@@ -55,6 +55,7 @@ type NetworkMonitor struct {
 	mu       sync.RWMutex
 	cancelFn context.CancelFunc
 	wg       sync.WaitGroup
+	lowSlow  *common.LowSlowDetector
 }
 
 // newNetworkMonitor creates a NetworkMonitor that sends events to eventCh.
@@ -65,6 +66,7 @@ func newNetworkMonitor(cfg common.Config, eventCh chan<- *common.HostEvent, logg
 		logger:   logger,
 		baseline: make(map[string]common.NetworkConnection),
 		stopCh:   make(chan struct{}),
+		lowSlow:  common.NewLowSlowDetector(0), // 0 uses the default 5-minute window
 	}
 }
 
@@ -136,6 +138,27 @@ func (m *NetworkMonitor) poll(ctx context.Context) {
 					remoteIPCounts[conn.PID] = make(map[string]struct{})
 				}
 				remoteIPCounts[conn.PID][conn.RemoteAddr] = struct{}{}
+			}
+			// Record connection for low-and-slow burst detection.
+			if conn.PID != 0 {
+				m.lowSlow.RecordNetworkConnection(conn.PID, time.Now())
+				if indicators := m.lowSlow.Evaluate(conn.PID); len(indicators) > 0 {
+					lowSlowEvent := &common.HostEvent{
+						EventType: "low_and_slow_anomaly",
+						Platform:  "linux",
+						Hostname:  m.cfg.Hostname,
+						Timestamp: time.Now(),
+						Process: &common.ProcessInfo{
+							PID:  conn.PID,
+							Name: conn.ProcessName,
+						},
+						Indicators: indicators,
+					}
+					select {
+					case m.eventCh <- lowSlowEvent:
+					case <-ctx.Done():
+					}
+				}
 			}
 		}
 	}
