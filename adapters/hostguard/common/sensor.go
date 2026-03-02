@@ -40,6 +40,9 @@ type Config struct {
 	SensitivePathPrefixes []string
 	// HiddenScanInterval is the interval between hidden process scans. Default: 60s.
 	HiddenScanInterval time.Duration
+	// AllowedDNSResolvers is the list of DNS resolver IPs considered legitimate.
+	// Default: well-known public resolvers.
+	AllowedDNSResolvers []string
 }
 
 // AnomalyThresholds defines thresholds used for anomaly detection.
@@ -73,5 +76,8 @@ func DefaultConfig() Config {
 			`C:\Windows\System32`,
 		},
 		HiddenScanInterval: 60 * time.Second,
+		AllowedDNSResolvers: []string{
+			"8.8.8.8", "1.1.1.1", "8.8.4.4", "9.9.9.9", "208.67.222.222",
+		},
 	}
 }

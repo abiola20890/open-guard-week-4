@@ -22,6 +22,8 @@ type ProcessInfo struct {
 	MemoryMB   float64
 	StartTime  time.Time
 	Status     string // running, sleeping, zombie, etc.
+	ContainerID string // container ID extracted from cgroup path, if any
+	CgroupPath  string // raw cgroup path from /proc/<pid>/cgroup
 }
 
 // StartupItem represents a scheduled task, launch agent, service, or cron entry.
@@ -42,7 +44,16 @@ type HostEvent struct {
 	// privilege_escalation, startup_item_added, startup_item_modified,
 	// resource_spike, suspicious_path,
 	// file_access, file_modified, file_created, file_deleted, suspicious_file_access,
-	// hidden_process_detected
+	// hidden_process_detected,
+	// kernel_module_loaded, kernel_module_unloaded,
+	// kernel_extension_loaded, kernel_extension_unloaded,
+	// driver_loaded, driver_unloaded,
+	// user_login, user_logout, sudo_invocation, ssh_login, brute_force_attempt,
+	// dns_query, dns_config_changed,
+	// ipc_shared_memory_created, ipc_shared_memory_deleted,
+	// named_pipe_created, suspicious_ipc, suspicious_unix_socket, suspicious_named_pipe,
+	// container_escape_attempt, privileged_container_process,
+	// container_process_created, container_started, container_stopped
 	Platform      string // windows, darwin, linux
 	Hostname      string
 	Timestamp     time.Time
@@ -50,6 +61,8 @@ type HostEvent struct {
 	StartupItem   *StartupItem
 	FileIO        *FileIOEvent
 	HiddenProcess *HiddenProcessResult
+	Login         *LoginEvent
+	DNSQuery      *DNSQueryEvent
 	Indicators    []string               // matched indicator strings
 	RawData       map[string]interface{}
 }
@@ -107,6 +120,22 @@ func (e *HostEvent) ToUnifiedEvent() ([]byte, error) {
 		metadata["hidden_missing_from"] = e.HiddenProcess.MissingFrom
 		metadata["hidden_exe_path"] = e.HiddenProcess.ExePath
 		metadata["hidden_cmdline"] = e.HiddenProcess.CmdLine
+	}
+	if e.Login != nil {
+		metadata["login_username"] = e.Login.Username
+		metadata["login_tty"] = e.Login.TTY
+		metadata["login_remote_host"] = e.Login.RemoteHost
+		metadata["login_pid"] = e.Login.PID
+		metadata["login_session_id"] = e.Login.SessionID
+		metadata["login_subtype"] = e.Login.EventSubtype
+	}
+	if e.DNSQuery != nil {
+		metadata["dns_pid"] = e.DNSQuery.PID
+		metadata["dns_process_name"] = e.DNSQuery.ProcessName
+		metadata["dns_query_name"] = e.DNSQuery.QueryName
+		metadata["dns_query_type"] = e.DNSQuery.QueryType
+		metadata["dns_resolver"] = e.DNSQuery.Resolver
+		metadata["dns_response"] = e.DNSQuery.Response
 	}
 	for k, v := range e.RawData {
 		metadata[k] = v
@@ -168,6 +197,12 @@ func classifyEvent(e *HostEvent) (severity string, riskScore float64, tier strin
 		if ind == "critical_service_stopped" {
 			return "critical", 95.0, "T3"
 		}
+		if ind == "suspicious_kernel_module" {
+			return "critical", 95.0, "immediate"
+		}
+		if ind == "hidden_driver" {
+			return "critical", 95.0, "immediate"
+		}
 	}
 	switch e.EventType {
 	case "privilege_escalation":
@@ -190,6 +225,35 @@ func classifyEvent(e *HostEvent) (severity string, riskScore float64, tier strin
 		return "high", 70.0, "T2"
 	case "file_access", "file_modified", "file_created", "file_deleted":
 		return "medium", 40.0, "T1"
+	case "kernel_module_loaded", "kernel_module_unloaded",
+		"kernel_extension_loaded", "kernel_extension_unloaded":
+		return "medium", 50.0, "T2"
+	case "driver_loaded", "driver_unloaded":
+		return "medium", 50.0, "T2"
+	case "user_login", "user_logout":
+		return "info", 15.0, "T0"
+	case "sudo_invocation":
+		return "medium", 45.0, "T2"
+	case "ssh_login":
+		return "medium", 40.0, "T1"
+	case "brute_force_attempt":
+		return "critical", 90.0, "immediate"
+	case "dns_query":
+		return "info", 10.0, "T0"
+	case "dns_config_changed":
+		return "medium", 50.0, "T2"
+	case "ipc_shared_memory_created", "ipc_shared_memory_deleted":
+		return "low", 20.0, "T1"
+	case "suspicious_ipc", "suspicious_unix_socket", "suspicious_named_pipe":
+		return "high", 70.0, "T2"
+	case "named_pipe_created":
+		return "info", 10.0, "T0"
+	case "container_escape_attempt":
+		return "critical", 95.0, "immediate"
+	case "privileged_container_process":
+		return "high", 75.0, "T3"
+	case "container_process_created", "container_started", "container_stopped":
+		return "info", 10.0, "T0"
 	default:
 		return "low", 20.0, "T1"
 	}

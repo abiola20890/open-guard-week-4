@@ -15,7 +15,9 @@ import (
 
 // LinuxSensor is the Linux implementation of the HostGuard Sensor interface.
 // It aggregates ProcessMonitor, SystemdMonitor, CronMonitor, and NetworkMonitor,
-// as well as the real-time RealtimeProcessMonitor, FileMonitor, and HiddenProcessScanner.
+// as well as the real-time RealtimeProcessMonitor, FileMonitor, HiddenProcessScanner,
+// ResourceMonitor, KernelModuleMonitor, SessionMonitor, DNSMonitor,
+// IPCMonitor, and ContainerMonitor.
 type LinuxSensor struct {
 	cfg           common.Config
 	publisher     *common.Publisher
@@ -28,6 +30,12 @@ type LinuxSensor struct {
 	systemd       *SystemdMonitor
 	cron          *CronMonitor
 	network       *NetworkMonitor
+	resource      *ResourceMonitor
+	kmodule       *KernelModuleMonitor
+	session       *SessionMonitor
+	dns           *DNSMonitor
+	ipc           *IPCMonitor
+	container     *ContainerMonitor
 	wg            sync.WaitGroup
 	cancelFn      context.CancelFunc
 }
@@ -53,6 +61,12 @@ func NewSensor(cfg common.Config, publisher *common.Publisher, logger *zap.Logge
 	s.systemd = newSystemdMonitor(cfg, eventCh, logger)
 	s.cron = newCronMonitor(cfg, eventCh, logger)
 	s.network = newNetworkMonitor(cfg, eventCh, logger)
+	s.resource = newResourceMonitor(cfg, eventCh, logger)
+	s.kmodule = newKernelModuleMonitor(cfg, eventCh, logger)
+	s.session = newSessionMonitor(cfg, eventCh, logger)
+	s.dns = newDNSMonitor(cfg, eventCh, logger)
+	s.ipc = newIPCMonitor(cfg, eventCh, logger)
+	s.container = newContainerMonitor(cfg, eventCh, logger)
 	return s
 }
 
@@ -86,6 +100,24 @@ func (s *LinuxSensor) Start(ctx context.Context) error {
 	if err := s.network.Start(ctx); err != nil {
 		s.logger.Warn("linux sensor: start network monitor", zap.Error(err))
 	}
+	if err := s.resource.Start(ctx); err != nil {
+		s.logger.Warn("linux sensor: start resource monitor", zap.Error(err))
+	}
+	if err := s.kmodule.Start(ctx); err != nil {
+		s.logger.Warn("linux sensor: start kernel module monitor", zap.Error(err))
+	}
+	if err := s.session.Start(ctx); err != nil {
+		s.logger.Warn("linux sensor: start session monitor", zap.Error(err))
+	}
+	if err := s.dns.Start(ctx); err != nil {
+		s.logger.Warn("linux sensor: start dns monitor", zap.Error(err))
+	}
+	if err := s.ipc.Start(ctx); err != nil {
+		s.logger.Warn("linux sensor: start ipc monitor", zap.Error(err))
+	}
+	if err := s.container.Start(ctx); err != nil {
+		s.logger.Warn("linux sensor: start container monitor", zap.Error(err))
+	}
 
 	s.wg.Add(1)
 	go s.publishLoop(ctx)
@@ -106,6 +138,12 @@ func (s *LinuxSensor) Stop() error {
 	s.systemd.Stop()
 	s.cron.Stop()
 	s.network.Stop()
+	s.resource.Stop()
+	s.kmodule.Stop()
+	s.session.Stop()
+	s.dns.Stop()
+	s.ipc.Stop()
+	s.container.Stop()
 	s.wg.Wait()
 	s.logger.Info("linux sensor: stopped")
 	return nil
