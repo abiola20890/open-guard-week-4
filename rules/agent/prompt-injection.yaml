@@ -1,0 +1,35 @@
+id: AGENT-004
+name: prompt-injection-detected
+version: "1.0"
+domain: agent
+description: >
+  Detects prompt injection patterns in agent inputs that attempt to override
+  system instructions, bypass constitutional rules, or hijack agent behaviour
+  through crafted user content.
+
+conditions:
+  - id: COND-001
+    description: Agent payload contains known prompt injection pattern
+    field: agent.action_payload
+    operator: contains_any
+    value:
+      - "ignore previous instructions"
+      - "disregard all prior"
+      - "system: "
+      - "<|im_start|>"
+      - "###instruction"
+      - "you are now"
+      - "forget everything"
+      - "new instructions:"
+
+severity_mapping:
+  - conditions_matched: 1
+    severity: critical
+    tier: immediate
+
+response:
+  immediate:
+    - action: block_action
+    - action: suspend_agent
+    - action: alert
+      target: security-team

@@ -1,0 +1,28 @@
+id: AGENT-002
+name: unapproved-tool-use
+version: "1.0"
+domain: agent
+description: >
+  Detects AI agents invoking tools that are not in their approved tool list.
+  Each agent has a pre-registered set of approved tools; any invocation
+  outside this set is blocked and escalated.
+
+conditions:
+  - id: COND-001
+    description: Agent invoked a tool not in its approved_tools list
+    field: agent.tool_invocation.tool_name
+    operator: not_in_field
+    value: agent.approved_tools
+
+severity_mapping:
+  - conditions_matched: 1
+    severity: high
+    tier: T2
+
+response:
+  t2:
+    - action: block_action
+    - action: request_approval
+  t3:
+    - action: block_action
+    - action: suspend_agent
