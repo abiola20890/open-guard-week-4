@@ -36,6 +36,26 @@ type mibUDPRowOwnerPID struct {
 	OwningPID uint32
 }
 
+// MIB_TCP6ROW_OWNER_PID maps to the Windows MIB_TCP6ROW_OWNER_PID structure.
+type mibTCP6RowOwnerPID struct {
+	LocalAddr     [16]byte
+	LocalScopeID  uint32
+	LocalPort     uint32
+	RemoteAddr    [16]byte
+	RemoteScopeID uint32
+	RemotePort    uint32
+	State         uint32
+	OwningPID     uint32
+}
+
+// MIB_UDP6ROW_OWNER_PID maps to the Windows MIB_UDP6ROW_OWNER_PID structure.
+type mibUDP6RowOwnerPID struct {
+	LocalAddr    [16]byte
+	LocalScopeID uint32
+	LocalPort    uint32
+	OwningPID    uint32
+}
+
 // tcpStateWindowsMap maps Windows TCP state values to strings.
 var tcpStateWindowsMap = map[uint32]string{
 	1:  "CLOSED",
@@ -62,7 +82,8 @@ var (
 const (
 	tcpTableOwnerPIDAll = 5
 	udpTableOwnerPID    = 1
-	afInet              = 2 // AF_INET
+	afInet              = 2  // AF_INET
+	afInet6             = 23 // AF_INET6
 )
 
 // NetworkMonitor watches Windows network connections using iphlpapi.dll.
@@ -194,6 +215,20 @@ func (m *NetworkMonitor) snapshot() ([]common.NetworkConnection, error) {
 		conns = append(conns, udpConns...)
 	}
 
+	tcp6Conns, err := getExtendedTCP6Table()
+	if err != nil {
+		m.logger.Debug("windows: GetExtendedTcpTable (IPv6)", zap.Error(err))
+	} else {
+		conns = append(conns, tcp6Conns...)
+	}
+
+	udp6Conns, err := getExtendedUDP6Table()
+	if err != nil {
+		m.logger.Debug("windows: GetExtendedUdpTable (IPv6)", zap.Error(err))
+	} else {
+		conns = append(conns, udp6Conns...)
+	}
+
 	return conns, nil
 }
 
@@ -290,6 +325,100 @@ func getExtendedUDPTable() ([]common.NetworkConnection, error) {
 		conns = append(conns, common.NetworkConnection{
 			PID:       row.OwningPID,
 			Protocol:  "udp",
+			LocalAddr: localAddr,
+			LocalPort: localPort,
+			Direction: "unknown",
+		})
+	}
+	return conns, nil
+}
+
+// getExtendedTCP6Table calls GetExtendedTcpTable with AF_INET6 to get IPv6 TCP connections.
+func getExtendedTCP6Table() ([]common.NetworkConnection, error) {
+	var size uint32
+	ret, _, _ := procGetExtendedTcpTable.Call(
+		0, uintptr(unsafe.Pointer(&size)), 1, afInet6, tcpTableOwnerPIDAll, 0,
+	)
+	if ret != 122 && ret != 0 {
+		return nil, fmt.Errorf("GetExtendedTcpTable (IPv6) size query: %d", ret)
+	}
+
+	buf := make([]byte, size)
+	ret, _, _ = procGetExtendedTcpTable.Call(
+		uintptr(unsafe.Pointer(&buf[0])),
+		uintptr(unsafe.Pointer(&size)),
+		1, afInet6, tcpTableOwnerPIDAll, 0,
+	)
+	if ret != 0 {
+		return nil, fmt.Errorf("GetExtendedTcpTable (IPv6): %d", ret)
+	}
+
+	count := binary.LittleEndian.Uint32(buf[0:4])
+	var conns []common.NetworkConnection
+	rowSize := uint32(unsafe.Sizeof(mibTCP6RowOwnerPID{}))
+	for i := uint32(0); i < count; i++ {
+		offset := 4 + i*rowSize
+		if offset+rowSize > uint32(len(buf)) {
+			break
+		}
+		row := (*mibTCP6RowOwnerPID)(unsafe.Pointer(&buf[offset]))
+		localAddr := net.IP(row.LocalAddr[:]).String()
+		remoteAddr := net.IP(row.RemoteAddr[:]).String()
+		localPort := ntohs(uint16(row.LocalPort & 0xFFFF))
+		remotePort := ntohs(uint16(row.RemotePort & 0xFFFF))
+		state := tcpStateWindowsMap[row.State]
+		direction := "unknown"
+		if remoteAddr != "::" {
+			direction = "outbound"
+		}
+		conns = append(conns, common.NetworkConnection{
+			PID:        row.OwningPID,
+			Protocol:   "tcp6",
+			LocalAddr:  localAddr,
+			LocalPort:  localPort,
+			RemoteAddr: remoteAddr,
+			RemotePort: remotePort,
+			State:      state,
+			Direction:  direction,
+		})
+	}
+	return conns, nil
+}
+
+// getExtendedUDP6Table calls GetExtendedUdpTable with AF_INET6 to get IPv6 UDP connections.
+func getExtendedUDP6Table() ([]common.NetworkConnection, error) {
+	var size uint32
+	ret, _, _ := procGetExtendedUdpTable.Call(
+		0, uintptr(unsafe.Pointer(&size)), 1, afInet6, udpTableOwnerPID, 0,
+	)
+	if ret != 122 && ret != 0 {
+		return nil, fmt.Errorf("GetExtendedUdpTable (IPv6) size query: %d", ret)
+	}
+
+	buf := make([]byte, size)
+	ret, _, _ = procGetExtendedUdpTable.Call(
+		uintptr(unsafe.Pointer(&buf[0])),
+		uintptr(unsafe.Pointer(&size)),
+		1, afInet6, udpTableOwnerPID, 0,
+	)
+	if ret != 0 {
+		return nil, fmt.Errorf("GetExtendedUdpTable (IPv6): %d", ret)
+	}
+
+	count := binary.LittleEndian.Uint32(buf[0:4])
+	var conns []common.NetworkConnection
+	rowSize := uint32(unsafe.Sizeof(mibUDP6RowOwnerPID{}))
+	for i := uint32(0); i < count; i++ {
+		offset := 4 + i*rowSize
+		if offset+rowSize > uint32(len(buf)) {
+			break
+		}
+		row := (*mibUDP6RowOwnerPID)(unsafe.Pointer(&buf[offset]))
+		localAddr := net.IP(row.LocalAddr[:]).String()
+		localPort := ntohs(uint16(row.LocalPort & 0xFFFF))
+		conns = append(conns, common.NetworkConnection{
+			PID:       row.OwningPID,
+			Protocol:  "udp6",
 			LocalAddr: localAddr,
 			LocalPort: localPort,
 			Direction: "unknown",

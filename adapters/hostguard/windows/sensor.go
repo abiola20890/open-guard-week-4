@@ -15,7 +15,8 @@ import (
 
 // WindowsSensor is the Windows implementation of the HostGuard Sensor interface.
 // It aggregates ProcessMonitor (or ETWProcessMonitor), SchedulerMonitor,
-// RegistryMonitor, NetworkMonitor, ServicesMonitor, FileMonitor, and HiddenProcessScanner.
+// RegistryMonitor, NetworkMonitor, ServicesMonitor, FileMonitor, HiddenProcessScanner,
+// ResourceMonitor, DriverMonitor, SessionMonitor, DNSMonitor, and NamedPipeMonitor.
 type WindowsSensor struct {
 	cfg           common.Config
 	publisher     *common.Publisher
@@ -29,6 +30,11 @@ type WindowsSensor struct {
 	registry      *RegistryMonitor
 	network       *NetworkMonitor
 	services      *ServicesMonitor
+	resource      *ResourceMonitor
+	driver        *DriverMonitor
+	session       *SessionMonitor
+	dns           *DNSMonitor
+	pipe          *NamedPipeMonitor
 	wg            sync.WaitGroup
 	cancelFn      context.CancelFunc
 }
@@ -55,6 +61,11 @@ func NewSensor(cfg common.Config, publisher *common.Publisher, logger *zap.Logge
 	s.registry = newRegistryMonitor(cfg, eventCh, logger)
 	s.network = newNetworkMonitor(cfg, eventCh, logger)
 	s.services = newServicesMonitor(cfg, eventCh, logger)
+	s.resource = newResourceMonitor(cfg, eventCh, logger)
+	s.driver = newDriverMonitor(cfg, eventCh, logger)
+	s.session = newSessionMonitor(cfg, eventCh, logger)
+	s.dns = newDNSMonitor(cfg, eventCh, logger)
+	s.pipe = newNamedPipeMonitor(cfg, eventCh, logger)
 	return s
 }
 
@@ -93,6 +104,21 @@ func (s *WindowsSensor) Start(ctx context.Context) error {
 	if err := s.hiddenScanner.Start(ctx); err != nil {
 		s.logger.Warn("windows sensor: start hidden process scanner", zap.Error(err))
 	}
+	if err := s.resource.Start(ctx); err != nil {
+		s.logger.Warn("windows sensor: start resource monitor", zap.Error(err))
+	}
+	if err := s.driver.Start(ctx); err != nil {
+		s.logger.Warn("windows sensor: start driver monitor", zap.Error(err))
+	}
+	if err := s.session.Start(ctx); err != nil {
+		s.logger.Warn("windows sensor: start session monitor", zap.Error(err))
+	}
+	if err := s.dns.Start(ctx); err != nil {
+		s.logger.Warn("windows sensor: start dns monitor", zap.Error(err))
+	}
+	if err := s.pipe.Start(ctx); err != nil {
+		s.logger.Warn("windows sensor: start named pipe monitor", zap.Error(err))
+	}
 
 	s.wg.Add(1)
 	go s.publishLoop(ctx)
@@ -114,6 +140,11 @@ func (s *WindowsSensor) Stop() error {
 	s.registry.Stop()
 	s.network.Stop()
 	s.services.Stop()
+	s.resource.Stop()
+	s.driver.Stop()
+	s.session.Stop()
+	s.dns.Stop()
+	s.pipe.Stop()
 	s.wg.Wait()
 	s.logger.Info("windows sensor: stopped")
 	return nil
