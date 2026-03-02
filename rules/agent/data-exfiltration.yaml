@@ -1,0 +1,35 @@
+id: AGENT-005
+name: agent-data-exfiltration
+version: "1.0"
+domain: agent
+description: >
+  Detects AI agents attempting to exfiltrate data outside their sanctioned
+  scope: bulk export operations, uploads to external storage, or writes to
+  external databases not in the approved resource list.
+
+conditions:
+  - id: COND-001
+    description: Agent action type is a bulk data export or external write
+    field: agent.action_type
+    operator: in
+    value: ["bulk_export", "upload_to_s3", "write_to_external_db", "send_bulk_data"]
+
+  - id: COND-002
+    description: Target resource is not in agent's approved resource list
+    field: agent.target_resource
+    operator: not_in_field
+    value: agent.approved_resources
+
+severity_mapping:
+  - conditions_matched: 1
+    severity: critical
+    tier: immediate
+
+response:
+  immediate:
+    - action: block_action
+    - action: suspend_agent
+    - action: alert
+      target: security-team
+    - action: audit_log
+      level: critical

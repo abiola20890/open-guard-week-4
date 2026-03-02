@@ -1,0 +1,29 @@
+id: AGENT-003
+name: self-policy-modification
+version: "1.0"
+domain: agent
+description: >
+  Detects AI agents attempting to modify, delete, or disable their own
+  operational policies. This is a hard violation of Constitutional Principle 8
+  (No self-policy modification) and triggers immediate quarantine.
+
+conditions:
+  - id: COND-001
+    description: Agent action type is a policy modification operation
+    field: agent.action_type
+    operator: in
+    value: ["modify_policy", "update_policy", "patch_policy", "delete_policy", "disable_rule"]
+
+severity_mapping:
+  - conditions_matched: 1
+    severity: critical
+    tier: immediate
+
+response:
+  immediate:
+    - action: block_action
+    - action: quarantine_agent
+    - action: emergency_alert
+      target: ciso
+    - action: audit_log
+      level: critical
