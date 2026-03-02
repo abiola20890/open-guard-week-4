@@ -46,7 +46,7 @@ func newResourceMonitor(cfg common.Config, eventCh chan<- *common.HostEvent, log
 		eventCh: eventCh,
 		logger:  logger,
 		samples: make(map[uint32][]pidSample),
-		lowSlow: common.NewLowSlowDetector(0),
+		lowSlow: common.NewLowSlowDetector(0), // 0 uses the default 5-minute window
 	}
 }
 

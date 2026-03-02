@@ -33,6 +33,7 @@ type ProcessMonitor struct {
 	cancelFn  context.CancelFunc
 	wg        sync.WaitGroup
 	browser   *common.BrowserActivityAnalyzer
+	lowSlow   *common.LowSlowDetector
 }
 
 // newProcessMonitor creates a ProcessMonitor that sends events to eventCh.
@@ -43,6 +44,7 @@ func newProcessMonitor(cfg common.Config, eventCh chan<- *common.HostEvent, logg
 		logger:   logger,
 		lastPIDs: make(map[uint32]processSnapshot),
 		browser:  common.NewBrowserActivityAnalyzer(),
+		lowSlow:  common.NewLowSlowDetector(0), // 0 uses the default 5-minute window
 	}
 }
 
@@ -111,6 +113,28 @@ func (m *ProcessMonitor) poll(ctx context.Context) {
 			newCount++
 			m.emitEvent(ctx, "process_created", &snap.info, nil)
 			m.checkAnomalies(ctx, &snap.info)
+			// Record spawn for low-and-slow detection against the parent PID.
+			if snap.info.PPID != 0 {
+				m.lowSlow.RecordProcessSpawn(snap.info.PPID, time.Now())
+				if indicators := m.lowSlow.Evaluate(snap.info.PPID); len(indicators) > 0 {
+					parentName := readProcName(snap.info.PPID)
+					lowSlowEvent := &common.HostEvent{
+						EventType: "low_and_slow_anomaly",
+						Platform:  "linux",
+						Hostname:  m.cfg.Hostname,
+						Timestamp: time.Now(),
+						Process: &common.ProcessInfo{
+							PID:  snap.info.PPID,
+							Name: parentName,
+						},
+						Indicators: indicators,
+					}
+					select {
+					case m.eventCh <- lowSlowEvent:
+					case <-ctx.Done():
+					}
+				}
+			}
 		}
 		// Run browser activity analysis on every snapshot.
 		if indicators := m.browser.AnalyzeProcess(&snap.info); len(indicators) > 0 {
