@@ -7,15 +7,24 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
+	jwtv5 "github.com/golang-jwt/jwt/v5"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
+	"golang.org/x/crypto/bcrypt"
 
 	auditled "github.com/DiniMuhd7/openguard/services/audit-ledger"
 )
+
+// contextKey is a typed key for values stored in request contexts.
+type contextKey string
+
+const contextKeyActor contextKey = "actor"
 
 // Config holds configuration for the API Server.
 type Config struct {
@@ -31,19 +40,24 @@ type Config struct {
 
 // Server is the console API HTTP server.
 type Server struct {
-	cfg      Config
-	ledger   *auditled.Ledger
-	logger   *zap.Logger
-	srv      *http.Server
-	registry *prometheus.Registry
+	cfg       Config
+	ledger    *auditled.Ledger
+	events    *EventStore
+	incidents *IncidentStore
+	logger    *zap.Logger
+	srv       *http.Server
+	registry  *prometheus.Registry
 
 	// metrics
-	requestsTotal *prometheus.CounterVec
+	requestsTotal   *prometheus.CounterVec
 	requestDuration *prometheus.HistogramVec
+
+	// credentials: username → bcrypt hash
+	credentials map[string][]byte
 }
 
 // NewServer constructs a new console API Server.
-func NewServer(cfg Config, ledger *auditled.Ledger, logger *zap.Logger) *Server {
+func NewServer(cfg Config, ledger *auditled.Ledger, events *EventStore, incidents *IncidentStore, logger *zap.Logger) *Server {
 	if cfg.ReadTimeout == 0 {
 		cfg.ReadTimeout = 30 * time.Second
 	}
@@ -53,32 +67,67 @@ func NewServer(cfg Config, ledger *auditled.Ledger, logger *zap.Logger) *Server 
 	reg := prometheus.NewRegistry()
 	reqTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "openguard_http_requests_total",
-		Help: "Total number of HTTP requests by method and path.",
-	}, []string{"method", "path"})
+		Help: "Total number of HTTP requests by method, path and status.",
+	}, []string{"method", "path", "status"})
 	reqDuration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "openguard_http_request_duration_seconds",
 		Help:    "HTTP request duration in seconds.",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"method", "path"})
 	reg.MustRegister(reqTotal, reqDuration)
+
+	// Load admin credentials from environment, defaulting to admin/changeme.
+	adminUser := os.Getenv("OPENGUARD_ADMIN_USER")
+	if adminUser == "" {
+		adminUser = "admin"
+	}
+	adminHash := os.Getenv("OPENGUARD_ADMIN_BCRYPT_HASH")
+	var hashBytes []byte
+	if adminHash != "" {
+		hashBytes = []byte(adminHash)
+	} else {
+		// Default: bcrypt of "changeme"
+		h, _ := bcrypt.GenerateFromPassword([]byte("changeme"), bcrypt.DefaultCost)
+		hashBytes = h
+	}
+	creds := map[string][]byte{adminUser: hashBytes}
+
 	return &Server{
 		cfg:             cfg,
 		ledger:          ledger,
+		events:          events,
+		incidents:       incidents,
 		logger:          logger,
 		registry:        reg,
 		requestsTotal:   reqTotal,
 		requestDuration: reqDuration,
+		credentials:     creds,
 	}
+}
+
+// responseWriter wraps http.ResponseWriter to capture the HTTP status code.
+type responseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.status = code
+	rw.ResponseWriter.WriteHeader(code)
 }
 
 // Start registers routes and begins listening for requests.
 func (s *Server) Start(_ context.Context) error {
 	mux := http.NewServeMux()
+
+	// Login endpoint is registered directly on the mux — it is exempt from JWT auth.
+	mux.HandleFunc("/api/v1/login", s.handleLogin)
+
 	s.registerRoutes(mux)
 
 	s.srv = &http.Server{
 		Addr:         s.cfg.ListenAddr,
-		Handler:      s.loggingMiddleware(s.authMiddleware(mux)),
+		Handler:      s.corsMiddleware(s.loggingMiddleware(s.authMiddleware(mux))),
 		ReadTimeout:  s.cfg.ReadTimeout,
 		WriteTimeout: s.cfg.WriteTimeout,
 	}
@@ -105,11 +154,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/metrics", s.handleMetrics)
 	mux.HandleFunc("/api/v1/events", s.handleEvents)
+	mux.HandleFunc("/api/v1/events/", s.handleEvents)
 	mux.HandleFunc("/api/v1/incidents", s.handleIncidents)
 	mux.HandleFunc("/api/v1/audit", s.handleAudit)
 	mux.HandleFunc("/api/v1/sensors", s.handleSensors)
 
-	// Incident action endpoints — matched by prefix.
+	// Incident detail and action endpoints — matched by prefix.
 	mux.HandleFunc("/api/v1/incidents/", s.handleIncidentActions)
 
 	// Serve the embedded React console for all other paths.
@@ -136,6 +186,39 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	})
 }
 
+// handleLogin handles POST /api/v1/login.
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Username == "" || req.Password == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username and password required"})
+		return
+	}
+	hash, ok := s.credentials[req.Username]
+	if !ok || bcrypt.CompareHashAndPassword(hash, []byte(req.Password)) != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
+		return
+	}
+	claims := jwtv5.MapClaims{
+		"sub": req.Username,
+		"exp": jwtv5.NewNumericDate(time.Now().Add(8 * time.Hour)),
+	}
+	token := jwtv5.NewWithClaims(jwtv5.SigningMethodHS256, claims)
+	signed, err := token.SignedString([]byte(s.cfg.JWTSecret))
+	if err != nil {
+		s.logger.Error("console api: jwt sign failed", zap.Error(err))
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"token": signed})
+}
+
 // handleHealth responds to GET /health with a 200 OK.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -160,10 +243,33 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// Detect /api/v1/events/:id — path must have something after the trailing slash.
+	if r.URL.Path != "/api/v1/events" && r.URL.Path != "/api/v1/events/" {
+		id := strings.TrimPrefix(r.URL.Path, "/api/v1/events/")
+		if id != "" {
+			event, ok := s.events.Get(id)
+			if !ok {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "event not found"})
+				return
+			}
+			writeJSON(w, http.StatusOK, event)
+			return
+		}
+	}
+	page := 1
+	if p := r.URL.Query().Get("page"); p != "" {
+		if n, err := strconv.Atoi(p); err == nil && n > 0 {
+			page = n
+		}
+	}
+	items, total := s.events.List(page, 50)
+	if items == nil {
+		items = []map[string]interface{}{}
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"events": []interface{}{},
-		"page":   1,
-		"total":  0,
+		"events": items,
+		"page":   page,
+		"total":  total,
 	})
 }
 
@@ -173,26 +279,93 @@ func (s *Server) handleIncidents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	page := 1
+	if p := r.URL.Query().Get("page"); p != "" {
+		if n, err := strconv.Atoi(p); err == nil && n > 0 {
+			page = n
+		}
+	}
+	items, total := s.incidents.List(page, 50)
+	if items == nil {
+		items = []*Incident{}
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"incidents": []interface{}{},
-		"page":      1,
-		"total":     0,
+		"incidents": items,
+		"page":      page,
+		"total":     total,
 	})
 }
 
-// handleIncidentActions handles POST .../approve, .../deny, .../override.
+// handleIncidentActions handles GET /api/v1/incidents/:id and
+// POST /api/v1/incidents/:id/{approve,deny,override}.
 func (s *Server) handleIncidentActions(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/incidents/")
+	parts := strings.SplitN(path, "/", 2)
+
+	// GET /api/v1/incidents/:id — single incident lookup.
+	if r.Method == http.MethodGet {
+		if len(parts) != 1 || parts[0] == "" {
+			http.Error(w, "invalid path", http.StatusBadRequest)
+			return
+		}
+		incident, ok := s.incidents.Get(parts[0])
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "incident not found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, incident)
+		return
+	}
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	path := strings.TrimPrefix(r.URL.Path, "/api/v1/incidents/")
-	parts := strings.SplitN(path, "/", 2)
 	if len(parts) != 2 {
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
 	}
 	incidentID, action := parts[0], parts[1]
+
+	// Validate action.
+	switch action {
+	case "approve", "deny", "override":
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid action"})
+		return
+	}
+
+	// Map action to status (override → overridden, approve → approved, deny → denied).
+	var status string
+	switch action {
+	case "approve":
+		status = "approved"
+	case "deny":
+		status = "denied"
+	case "override":
+		status = "overridden"
+	default:
+		status = action + "d"
+	}
+
+	// Persist the status change.
+	s.incidents.UpdateStatus(incidentID, status)
+
+	// Write audit ledger entry.
+	actor, _ := r.Context().Value(contextKeyActor).(string)
+	if actor == "" {
+		actor = "operator"
+	}
+	entry := auditled.AuditEntry{
+		EventID:  incidentID,
+		Actor:    actor,
+		Action:   action,
+		Decision: status,
+	}
+	if err := s.ledger.Append(r.Context(), entry); err != nil {
+		s.logger.Warn("console api: audit append failed", zap.Error(err))
+	}
+
 	s.logger.Info("console api: incident action",
 		zap.String("incident_id", incidentID),
 		zap.String("action", action),
@@ -332,11 +505,25 @@ func (s *Server) handleSensors(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"sensors": sensors})
 }
 
-// authMiddleware validates JWT Bearer tokens on all non-health endpoints.
+// corsMiddleware adds CORS headers to every response and handles OPTIONS preflight.
+func (s *Server) corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// authMiddleware validates JWT Bearer tokens on all non-health/metrics/login endpoints.
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Health and metrics endpoints are unauthenticated.
-		if r.URL.Path == "/health" || r.URL.Path == "/metrics" {
+		// Health, metrics, and login endpoints are unauthenticated.
+		if r.URL.Path == "/health" || r.URL.Path == "/metrics" || r.URL.Path == "/api/v1/login" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -345,27 +532,42 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		// Stub: full implementation validates JWT against s.cfg.JWTSecret.
-		token := strings.TrimPrefix(auth, "Bearer ")
-		if token == "" {
+		tokenStr := strings.TrimPrefix(auth, "Bearer ")
+		token, err := jwtv5.Parse(tokenStr, func(t *jwtv5.Token) (interface{}, error) {
+			if _, ok := t.Method.(*jwtv5.SigningMethodHMAC); !ok {
+				return nil, jwtv5.ErrSignatureInvalid
+			}
+			return []byte(s.cfg.JWTSecret), nil
+		}, jwtv5.WithValidMethods([]string{"HS256"}))
+		if err != nil || !token.Valid {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		next.ServeHTTP(w, r)
+		claims, ok := token.Claims.(jwtv5.MapClaims)
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		subject, _ := claims.GetSubject()
+		ctx := context.WithValue(r.Context(), contextKeyActor, subject)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-// loggingMiddleware logs each request and records Prometheus metrics.
+// loggingMiddleware logs each request, records Prometheus metrics, and captures HTTP status.
 func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		next.ServeHTTP(w, r)
+		rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rw, r)
 		duration := time.Since(start)
-		s.requestsTotal.WithLabelValues(r.Method, r.URL.Path).Inc()
+		statusStr := strconv.Itoa(rw.status)
+		s.requestsTotal.WithLabelValues(r.Method, r.URL.Path, statusStr).Inc()
 		s.requestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(duration.Seconds())
 		s.logger.Info("console api: request",
 			zap.String("method", r.Method),
 			zap.String("path", r.URL.Path),
+			zap.Int("status", rw.status),
 			zap.Duration("latency", duration),
 			zap.String("remote_addr", r.RemoteAddr),
 		)

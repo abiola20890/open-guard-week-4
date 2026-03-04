@@ -6,12 +6,16 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -19,9 +23,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 
-	mg "github.com/DiniMuhd7/openguard/model-gateway/interfaces"
 	"github.com/DiniMuhd7/openguard/model-gateway/audit"
 	"github.com/DiniMuhd7/openguard/model-gateway/guardrails"
+	mg "github.com/DiniMuhd7/openguard/model-gateway/interfaces"
 	"github.com/DiniMuhd7/openguard/model-gateway/providers/claude"
 	"github.com/DiniMuhd7/openguard/model-gateway/providers/codex"
 	"github.com/DiniMuhd7/openguard/model-gateway/providers/gemini"
@@ -38,6 +42,7 @@ type modelRequest struct {
 	RiskLevel  string   `json:"risk_level"`
 	Domain     string   `json:"domain"`
 	Indicators []string `json:"indicators"`
+	Signature  string   `json:"signature,omitempty"`
 }
 
 // modelResponse is the JSON schema published to the result topic.
@@ -46,6 +51,44 @@ type modelResponse struct {
 	Result     *mg.AnalysisResult `json:"result,omitempty"`
 	Error      string             `json:"error,omitempty"`
 	Redactions []string           `json:"redactions,omitempty"`
+}
+
+// rateLimiter tracks per-agent call counts within a rolling minute window.
+type rateLimiter struct {
+	mu       sync.Mutex
+	counts   map[string][]time.Time
+	limitRPM int
+}
+
+func newRateLimiter(limitRPM int) *rateLimiter {
+	return &rateLimiter{
+		counts:   make(map[string][]time.Time),
+		limitRPM: limitRPM,
+	}
+}
+
+// allow returns true if the agent is within rate limit, false if exceeded.
+func (rl *rateLimiter) allow(agentID string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	now := time.Now()
+	cutoff := now.Add(-time.Minute)
+	times := rl.counts[agentID]
+	// Remove entries older than one minute.
+	j := 0
+	for _, t := range times {
+		if t.After(cutoff) {
+			times[j] = t
+			j++
+		}
+	}
+	times = times[:j]
+	if len(times) >= rl.limitRPM {
+		rl.counts[agentID] = times
+		return false
+	}
+	rl.counts[agentID] = append(times, now)
+	return true
 }
 
 func main() {
@@ -65,6 +108,15 @@ func main() {
 	openAIKey := os.Getenv("OPENGUARD_OPENAI_API_KEY")
 	anthropicKey := os.Getenv("OPENGUARD_ANTHROPIC_API_KEY")
 	geminiKey := os.Getenv("OPENGUARD_GEMINI_API_KEY")
+
+	sigSecret := os.Getenv("OPENGUARD_MSG_HMAC_SECRET")
+
+	rateLimitRPM := 60
+	if v := os.Getenv("OPENGUARD_RATE_LIMIT_RPM"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			rateLimitRPM = n
+		}
+	}
 
 	minConfidence := 0.0
 	if v := os.Getenv("OPENGUARD_MIN_CONFIDENCE"); v != "" {
@@ -101,7 +153,7 @@ func main() {
 	toolPolicyPath := envOr("OPENGUARD_TOOL_POLICY_PATH", "policies/agent-tools.yaml")
 	toolChecker, err := toolcheck.New(toolcheck.Config{PolicyPath: toolPolicyPath}, logger)
 	if err != nil {
-		logger.Warn("model-gateway-agent: could not load tool policy, falling back to allow-all",
+		logger.Warn("model-gateway-agent: could not load tool policy, using fail-secure deny-all default",
 			zap.String("path", toolPolicyPath), zap.Error(err))
 		fallback, ferr := toolcheck.New(toolcheck.Config{}, logger)
 		if ferr != nil {
@@ -110,11 +162,29 @@ func main() {
 		toolChecker = fallback
 	}
 
+	// ── Build rate limiter ───────────────────────────────────────────────────
+	limiter := newRateLimiter(rateLimitRPM)
+
 	// ── Build router ─────────────────────────────────────────────────────────
 	router := routing.NewRouter(providers, routing.Config{PrimaryProviderIndex: 0}, logger)
 
 	// ── Connect to NATS ──────────────────────────────────────────────────────
-	nc, err := nats.Connect(natsURL)
+	natsUser := os.Getenv("OPENGUARD_NATS_USER")
+	natsPassword := os.Getenv("OPENGUARD_NATS_PASSWORD")
+	natsCreds := os.Getenv("OPENGUARD_NATS_CREDS_FILE")
+	natsCACert := os.Getenv("OPENGUARD_NATS_CA_CERT")
+
+	var natsOpts []nats.Option
+	if natsCreds != "" {
+		natsOpts = append(natsOpts, nats.UserCredentials(natsCreds))
+	} else if natsUser != "" {
+		natsOpts = append(natsOpts, nats.UserInfo(natsUser, natsPassword))
+	}
+	if natsCACert != "" {
+		natsOpts = append(natsOpts, nats.RootCAs(natsCACert))
+	}
+
+	nc, err := nats.Connect(natsURL, natsOpts...)
 	if err != nil {
 		logger.Fatal("model-gateway-agent: failed to connect to NATS",
 			zap.String("nats_url", natsURL), zap.Error(err))
@@ -140,17 +210,17 @@ func main() {
 
 	// ── Subscribe to model requests ──────────────────────────────────────────
 	sub, err := nc.Subscribe(modelTopic, func(msg *nats.Msg) {
-		handleMessage(msg, nc, resultTopic, pipeline, toolChecker, router, auditLedger, strategy, logger)
+		handleMessage(msg, nc, resultTopic, pipeline, toolChecker, router, auditLedger, strategy, sigSecret, limiter, logger)
 	})
 	if err != nil {
 		logger.Fatal("model-gateway-agent: failed to subscribe", zap.String("topic", modelTopic), zap.Error(err))
 	}
 	defer sub.Unsubscribe() //nolint:errcheck
 
-	// ── Prometheus metrics endpoint ──────────────────────────────────────────
+	// ── Prometheus metrics endpoint (localhost only) ──────────────────────────
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
-	srv := &http.Server{Addr: ":9093", Handler: mux}
+	srv := &http.Server{Addr: "127.0.0.1:9093", Handler: mux}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Warn("model-gateway-agent: metrics server error", zap.Error(err))
@@ -190,6 +260,26 @@ func main() {
 	logger.Info("model-gateway-agent: stopped")
 }
 
+// verifyHMAC verifies the HMAC-SHA256 signature of a JSON message payload.
+// The canonical form is the JSON payload with the "signature" field removed,
+// so the sender and receiver compute HMAC over identical data.
+func verifyHMAC(data []byte, signature, secret string) bool {
+	// Strip the signature field from the JSON before computing HMAC.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return false
+	}
+	delete(raw, "signature")
+	canonical, err := json.Marshal(raw)
+	if err != nil {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(canonical)
+	expected := hex.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(expected), []byte(signature))
+}
+
 // handleMessage processes a single NATS message through the 7-stage pipeline:
 // sanitize → tool check → route → validate → code scan → audit → publish.
 func handleMessage(
@@ -201,12 +291,56 @@ func handleMessage(
 	router *routing.Router,
 	auditLedger *audit.AuditLedger,
 	routingStrategy string,
+	sigSecret string,
+	limiter *rateLimiter,
 	logger *zap.Logger,
 ) {
+	// Verify HMAC signature when a secret is configured.
+	if sigSecret != "" {
+		var raw map[string]interface{}
+		if err := json.Unmarshal(msg.Data, &raw); err != nil {
+			logger.Warn("model-gateway-agent: HMAC: failed to parse message", zap.Error(err))
+			publishError(nc, resultTopic, "", "signature verification failed", logger)
+			return
+		}
+		sig, _ := raw["signature"].(string)
+		// Compute HMAC over the canonical payload (signature field excluded).
+		if !verifyHMAC(msg.Data, sig, sigSecret) {
+			logger.Warn("model-gateway-agent: HMAC verification failed")
+			publishError(nc, resultTopic, "", "signature verification failed", logger)
+			return
+		}
+	}
+
 	var req modelRequest
 	if err := json.Unmarshal(msg.Data, &req); err != nil {
 		logger.Warn("model-gateway-agent: failed to deserialize request", zap.Error(err))
 		publishError(nc, resultTopic, "", fmt.Sprintf("deserialize: %v", err), logger)
+		return
+	}
+
+	// Require non-empty agent_id and event_id.
+	if req.AgentID == "" || req.EventID == "" {
+		logger.Warn("model-gateway-agent: missing agent_id or event_id",
+			zap.String("agent_id", req.AgentID),
+			zap.String("event_id", req.EventID))
+		publishError(nc, resultTopic, req.EventID, "agent_id and event_id are required", logger)
+		return
+	}
+
+	// Validate and floor risk_level.
+	switch req.RiskLevel {
+	case string(mg.RiskLow), string(mg.RiskMedium), string(mg.RiskHigh), string(mg.RiskCritical):
+	// valid
+	default:
+		req.RiskLevel = string(mg.RiskLow)
+	}
+
+	// Per-agent rate limiting.
+	if !limiter.allow(req.AgentID) {
+		logger.Warn("model-gateway-agent: rate limit exceeded",
+			zap.String("agent_id", req.AgentID))
+		publishError(nc, resultTopic, req.EventID, "rate limit exceeded", logger)
 		return
 	}
 
