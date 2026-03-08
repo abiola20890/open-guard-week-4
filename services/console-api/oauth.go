@@ -66,17 +66,10 @@ type oauthProviderConfig struct {
 }
 
 // oauthProviderConfigs maps provider ID to its OAuth2 configuration.
-// Only providers with a real OAuth2 authorization server are listed here.
-// Unused providers use the credential-save endpoint instead.
-var oauthProviderConfigs = map[string]oauthProviderConfig{
-	"google-gemini": {
-		AuthURL:         "https://accounts.google.com/o/oauth2/v2/auth",
-		TokenURL:        "https://oauth2.googleapis.com/token",
-		Scopes:          []string{"https://www.googleapis.com/auth/generative-language"},
-		ClientIDEnv:     "GOOGLE_CLIENT_ID",
-		ClientSecretEnv: "GOOGLE_CLIENT_SECRET",
-	},
-}
+// No providers are currently configured for OAuth2; all three supported
+// providers (OpenAI, Anthropic, Google Gemini) authenticate via API key.
+// This map exists for future OAuth2 provider additions.
+var oauthProviderConfigs = map[string]oauthProviderConfig{}
 
 // hasOAuth reports whether the given provider supports OAuth2 sign-in.
 func hasOAuth(provider string) bool {

@@ -2,10 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, type ModelProvider } from '../api';
 import { useToast } from '../contexts/ToastContext';
 
-const PROVIDER_SIGN_IN_LABELS: Record<string, string> = {
-  'google-gemini': 'Sign in with Google',
-};
-
 export default function ModelSettings() {
   const [providers, setProviders] = useState<ModelProvider[]>([]);
   const [active, setActive] = useState('');
@@ -124,7 +120,7 @@ export default function ModelSettings() {
     <div>
       <div className="page-header">
         <h2>AI Models</h2>
-        <p>Sign in to a model provider and select it as the active AI for OpenGuard analysis</p>
+        <p>Connect your model provider account and select it as the active AI for OpenGuard analysis</p>
       </div>
 
       {error && <div className="error-msg">⚠️ {error}</div>}
@@ -191,7 +187,7 @@ export default function ModelSettings() {
                     style={{ fontSize: '0.8rem', padding: '0.375rem 0.75rem' }}
                     onClick={() => void handleOAuthConnect(p.id)}
                   >
-                    {PROVIDER_SIGN_IN_LABELS[p.id] ?? `Sign in with ${p.name}`}
+                    {`Sign in with ${p.name}`}
                   </button>
                 ) : keyProvider === p.id ? (
                   /* ── Inline API key form ── */

@@ -294,15 +294,15 @@ func callClaude(ctx context.Context, prompt, apiKey string) (string, error) {
 	return "", fmt.Errorf("claude: no text content")
 }
 
-func callGemini(ctx context.Context, prompt, accessToken string) (string, error) {
-	if accessToken == "" {
+func callGemini(ctx context.Context, prompt, apiKey string) (string, error) {
+	if apiKey == "" {
 		return "", fmt.Errorf("google-gemini: not connected — sign in via Model Settings")
 	}
 	model := "gemini-1.5-pro"
-	// OAuth2 authenticated calls use the Authorization header; no ?key= query param.
+	// Gemini API key authentication uses the ?key= query parameter.
 	apiURL := fmt.Sprintf(
-		"https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent",
-		model)
+		"https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s",
+		model, apiKey)
 	body, _ := json.Marshal(map[string]interface{}{
 		"contents": []map[string]interface{}{
 			{"parts": []map[string]string{{"text": prompt}}},
@@ -314,7 +314,6 @@ func callGemini(ctx context.Context, prompt, accessToken string) (string, error)
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+accessToken)
 
 	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
