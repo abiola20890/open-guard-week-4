@@ -74,6 +74,9 @@ type Server struct {
 
 	// agentGuardStore holds the in-memory agent registry for the AgentGuard console.
 	agentGuardStore *agentStore
+
+	// modelGuard holds ModelGuard runtime state (audit entries, guardrail config).
+	modelGuard *modelGuardState
 }
 
 // NewServer constructs a new console API Server.
@@ -131,6 +134,7 @@ func NewServer(cfg Config, ledger *auditled.Ledger, events *EventStore, incident
 		credentials:     creds,
 		commsConfig:     newCommsConfig(),
 		agentGuardStore: newAgentStore(),
+		modelGuard:      newModelGuardState(),
 	}
 	s.activeProvider.Store(provider)
 	return s
@@ -211,6 +215,19 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/agentguard/agents/", s.handleAgentGuardAgentsPrefix)
 	mux.HandleFunc("/api/v1/agentguard/events", s.handleAgentGuardEvents)
 	mux.HandleFunc("/api/v1/agentguard/rules", s.handleAgentGuardRules)
+
+	// HostGuard-specific endpoints.
+	mux.HandleFunc("/api/v1/hostguard/stats", s.handleHostGuardStats)
+	mux.HandleFunc("/api/v1/hostguard/events", s.handleHostGuardEvents)
+	mux.HandleFunc("/api/v1/hostguard/rules", s.handleHostGuardRules)
+
+	// ModelGuard-specific endpoints (all dispatched through a single prefix handler).
+	mux.HandleFunc("/api/v1/modelguard/", s.handleModelGuardPrefix)
+	mux.HandleFunc("/api/v1/modelguard/stats", s.handleModelGuardStats)
+	mux.HandleFunc("/api/v1/modelguard/audit", s.handleModelGuardAudit)
+	mux.HandleFunc("/api/v1/modelguard/providers", s.handleModelGuardProviders)
+	mux.HandleFunc("/api/v1/modelguard/guardrails", s.handleModelGuardGuardrails)
+	mux.HandleFunc("/api/v1/modelguard/requests", s.handleModelGuardRequests)
 
 	// Incident detail and action endpoints — matched by prefix.
 	mux.HandleFunc("/api/v1/incidents/", s.handleIncidentActions)

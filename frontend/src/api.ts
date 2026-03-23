@@ -305,6 +305,76 @@ export interface CommsConfigResponse {
   bulk_message_window_sec: number;
 }
 
+// ─── ModelGuard types ────────────────────────────────────────────────────────
+
+export interface ModelCallEntry {
+  call_id: string;
+  timestamp: string;
+  agent_id: string;
+  provider: string;
+  risk_level: string;
+  routing_strategy: string;
+  latency_ms: number;
+  token_count: number;
+  redactions?: string[];
+  blocked: boolean;
+  input_hash: string;
+  output_hash: string;
+}
+
+export interface ModelCallAuditResponse {
+  entries: ModelCallEntry[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface KvStat {
+  label: string;
+  count: number;
+}
+
+export interface ModelGuardStatsResponse {
+  total_calls: number;
+  blocked_calls: number;
+  avg_latency_ms: number;
+  avg_token_count: number;
+  avg_confidence: number;
+  provider_breakdown: KvStat[];
+  strategy_breakdown: KvStat[];
+  risk_breakdown: KvStat[];
+  active_provider: string;
+  period: string;
+  computed_at: string;
+}
+
+export interface ProviderHealthEntry {
+  id: string;
+  name: string;
+  healthy: boolean;
+  latency_ms: number;
+  last_checked: string;
+  error?: string;
+}
+
+export interface ModelGuardProvidersResponse {
+  providers: ProviderHealthEntry[];
+}
+
+export interface GuardrailConfig {
+  block_on_injection: boolean;
+  redact_credentials: boolean;
+  redact_pii: boolean;
+  max_prompt_length: number;
+  min_confidence: number;
+  rate_limit_rpm: number;
+}
+
+export interface GuardrailUpdateResponse {
+  status: string;
+  config: GuardrailConfig;
+}
+
 export interface CommsChannelUpdate {
   id: string;
   enabled: boolean;
@@ -314,6 +384,46 @@ export interface CommsChannelUpdate {
   bearer_token?: string;
   bot_token?: string;
   webhook_url?: string;
+}
+
+// ─── HostGuard types ─────────────────────────────────────────────────────────
+
+export interface HostEventTypeStat {
+  type: string;
+  count: number;
+}
+
+export interface HostStatsResponse {
+  total_events: number;
+  threat_events: number;
+  unique_hosts: number;
+  active_rules: number;
+  event_types: HostEventTypeStat[];
+  tier_breakdown: Record<string, number>;
+  period: string;
+  computed_at: string;
+}
+
+export interface HostEventsResponse {
+  events: Event[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface HostRule {
+  id: string;
+  name: string;
+  description: string;
+  severity: string;
+  tier: string;
+  responses: string[];
+  enabled: boolean;
+}
+
+export interface HostRulesResponse {
+  rules: HostRule[];
+  total: number;
 }
 
 // ─── API functions ───────────────────────────────────────────────────────────
@@ -365,4 +475,31 @@ export const api = {
   commsConfig: () => get<CommsConfigResponse>('/api/v1/commsguard/config'),
   updateCommsChannel: (channel: CommsChannelUpdate) =>
     postJSON<{ status: string }>('/api/v1/commsguard/config', { channel }),
+
+  // ModelGuard endpoints
+  modelGuardStats: () => get<ModelGuardStatsResponse>('/api/v1/modelguard/stats'),
+  modelGuardAudit: (provider?: string, riskLevel?: string, page?: number) =>
+    get<ModelCallAuditResponse>(
+      `/api/v1/modelguard/audit${buildQuery({
+        provider,
+        risk_level: riskLevel,
+        page: page !== undefined ? String(page) : undefined,
+      })}`,
+    ),
+  modelGuardProviders: () => get<ModelGuardProvidersResponse>('/api/v1/modelguard/providers'),
+  modelGuardGuardrails: () => get<GuardrailConfig>('/api/v1/modelguard/guardrails'),
+  updateModelGuardGuardrails: (cfg: GuardrailConfig) =>
+    postJSON<GuardrailUpdateResponse>('/api/v1/modelguard/guardrails', cfg),
+
+  // HostGuard endpoints
+  hostGuardStats: () => get<HostStatsResponse>('/api/v1/hostguard/stats'),
+  hostGuardEvents: (eventType?: string, hostname?: string, page?: number) =>
+    get<HostEventsResponse>(
+      `/api/v1/hostguard/events${buildQuery({
+        event_type: eventType,
+        hostname,
+        page: page !== undefined ? String(page) : undefined,
+      })}`,
+    ),
+  hostGuardRules: () => get<HostRulesResponse>('/api/v1/hostguard/rules'),
 };
