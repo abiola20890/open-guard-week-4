@@ -43,6 +43,11 @@ type Config struct {
 	// AllowedDNSResolvers is the list of DNS resolver IPs considered legitimate.
 	// Default: well-known public resolvers.
 	AllowedDNSResolvers []string
+	// DisableRealtimeMonitor forces the polling-based ProcessMonitor even when the
+	// realtime netlink process-connector is available.  Intended for testing in
+	// container environments where the netlink monitor starts without error but
+	// delivers events non-deterministically.
+	DisableRealtimeMonitor bool
 }
 
 // AnomalyThresholds defines thresholds used for anomaly detection.

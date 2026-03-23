@@ -84,15 +84,23 @@ func (s *LinuxSensor) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	s.cancelFn = cancel
 
-	// Try real-time netlink process monitor first; fall back to polling if unavailable.
-	if err := s.realtimeProc.Start(ctx); err != nil {
-		s.logger.Warn("linux sensor: realtime process monitor unavailable, using polling", zap.Error(err))
+	// Try real-time netlink process monitor first; fall back to polling if unavailable or disabled.
+	if !s.cfg.DisableRealtimeMonitor {
+		if err := s.realtimeProc.Start(ctx); err != nil {
+			s.logger.Warn("linux sensor: realtime process monitor unavailable, using polling", zap.Error(err))
+			if err := s.process.Start(ctx); err != nil {
+				cancel()
+				return fmt.Errorf("linux sensor: start process monitor: %w", err)
+			}
+		} else {
+			s.logger.Info("linux sensor: using realtime (netlink) process monitoring")
+		}
+	} else {
+		s.logger.Info("linux sensor: realtime process monitor disabled; using polling")
 		if err := s.process.Start(ctx); err != nil {
 			cancel()
 			return fmt.Errorf("linux sensor: start process monitor: %w", err)
 		}
-	} else {
-		s.logger.Info("linux sensor: using realtime (netlink) process monitoring")
 	}
 	if err := s.fileio.Start(ctx); err != nil {
 		s.logger.Warn("linux sensor: start file monitor", zap.Error(err))
