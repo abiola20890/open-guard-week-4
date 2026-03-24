@@ -68,12 +68,13 @@ type commsConfig struct {
 // newCommsConfig returns a commsConfig with defaults.
 func newCommsConfig() *commsConfig {
 	channels := map[string]*commsChannelConfig{
-		"whatsapp":     {Enabled: false},
-		"telegram":     {Enabled: false},
-		"messenger":    {Enabled: false},
-		"twilio_sms":   {Enabled: false},
-		"twilio_voice": {Enabled: false},
-		"twitter":      {Enabled: false},
+		"whatsapp":         {Enabled: false},
+		"whatsapp_linked":  {Enabled: false},
+		"telegram":         {Enabled: false},
+		"messenger":        {Enabled: false},
+		"twilio_sms":       {Enabled: false},
+		"twilio_voice":     {Enabled: false},
+		"twitter":          {Enabled: false},
 	}
 	return &commsConfig{
 		channels:        channels,
@@ -127,29 +128,41 @@ var knownCommsChannels = []commsChannelDef{
 		WebhookPath: "/twitter/webhook",
 		Description: "Monitors direct messages and mentions for phishing links, impersonation, and data exfiltration.",
 	},
+	{
+		ID:          "whatsapp_linked",
+		Name:        "WhatsApp Linked Devices",
+		Icon:        "📲",
+		WebhookPath: "/whatsapp/linked-devices/webhook",
+		Description: "Monitors WhatsApp multi-device companion sessions for unauthorized device linkages, session anomalies, and unknown device registrations.",
+	},
 }
 
 // channelFromAdapter maps event adapter/source names to canonical channel IDs.
 var channelFromAdapter = map[string]string{
-	"whatsapp":     "whatsapp",
-	"telegram":     "telegram",
-	"messenger":    "messenger",
-	"twilio_sms":   "twilio_sms",
-	"twilio_voice": "twilio_voice",
-	"twitter":      "twitter",
+	"whatsapp":        "whatsapp",
+	"whatsapp_linked": "whatsapp_linked",
+	"telegram":        "telegram",
+	"messenger":       "messenger",
+	"twilio_sms":      "twilio_sms",
+	"twilio_voice":    "twilio_voice",
+	"twitter":         "twitter",
 }
 
 // threatEventTypes is the set of event types that are classified as threats.
 var threatEventTypes = map[string]bool{
-	"phishing_detected":             true,
-	"credential_harvesting_detected": true,
-	"data_exfiltration_detected":    true,
-	"social_engineering_detected":   true,
-	"bulk_message_detected":         true,
-	"suspicious_link_detected":      true,
-	"malware_attachment_detected":   true,
-	"account_takeover_attempt":      true,
-	"spam_detected":                 true,
+	"phishing_detected":              true,
+	"credential_harvesting_detected":  true,
+	"data_exfiltration_detected":     true,
+	"social_engineering_detected":    true,
+	"bulk_message_detected":          true,
+	"suspicious_link_detected":       true,
+	"malware_attachment_detected":    true,
+	"account_takeover_attempt":       true,
+	"spam_detected":                  true,
+	// WhatsApp Linked Device threat types.
+	"suspicious_device_linked":       true,
+	"unknown_device_detected":        true,
+	"device_session_hijack":          true,
 }
 
 // handleCommsGuardStats handles GET /api/v1/commsguard/stats.
@@ -503,6 +516,84 @@ func (s *Server) handleCommsGuardConfig(w http.ResponseWriter, r *http.Request) 
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// linkedDeviceInfo represents a WhatsApp companion/linked device session.
+type linkedDeviceInfo struct {
+	DeviceID   string `json:"device_id"`
+	Platform   string `json:"platform"`   // iOS, Android, Web, Desktop
+	Name       string `json:"name"`       // e.g. "Chrome 121 on Windows 11"
+	LinkedAt   string `json:"linked_at"`
+	LastActive string `json:"last_active"`
+	Suspicious bool   `json:"suspicious"`
+	Status     string `json:"status"`     // "active" | "inactive"
+}
+
+// handleCommsLinkedDevices handles GET /api/v1/commsguard/linked-devices.
+// Returns the list of WhatsApp companion devices currently registered to the
+// configured WhatsApp Business account.
+func (s *Server) handleCommsLinkedDevices(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	now := time.Now().UTC()
+	// Seed representative demo devices; in production these would be fetched
+	// from the WhatsApp Cloud API /v18.0/<phone_number_id>/linked_accounts.
+	devices := []linkedDeviceInfo{
+		{
+			DeviceID:   "LD-4F2A1C3E",
+			Platform:   "Web",
+			Name:       "Chrome 121 on Windows 11",
+			LinkedAt:   now.Add(-72 * time.Hour).Format(time.RFC3339),
+			LastActive: now.Add(-5 * time.Minute).Format(time.RFC3339),
+			Suspicious: false,
+			Status:     "active",
+		},
+		{
+			DeviceID:   "LD-9B3D7F1A",
+			Platform:   "iOS",
+			Name:       "iPhone 15 Pro",
+			LinkedAt:   now.Add(-168 * time.Hour).Format(time.RFC3339),
+			LastActive: now.Add(-2 * time.Hour).Format(time.RFC3339),
+			Suspicious: false,
+			Status:     "active",
+		},
+		{
+			DeviceID:   "LD-2E8C5B4D",
+			Platform:   "Android",
+			Name:       "Unknown Android Device",
+			LinkedAt:   now.Add(-28 * time.Minute).Format(time.RFC3339),
+			LastActive: now.Add(-28 * time.Minute).Format(time.RFC3339),
+			Suspicious: true,
+			Status:     "active",
+		},
+		{
+			DeviceID:   "LD-7A1F3C9B",
+			Platform:   "Desktop",
+			Name:       "WhatsApp Desktop on macOS",
+			LinkedAt:   now.Add(-336 * time.Hour).Format(time.RFC3339),
+			LastActive: now.Add(-48 * time.Hour).Format(time.RFC3339),
+			Suspicious: false,
+			Status:     "inactive",
+		},
+	}
+
+	suspicious := 0
+	for _, d := range devices {
+		if d.Suspicious {
+			suspicious++
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"devices":         devices,
+		"total":           len(devices),
+		"suspicious_count": suspicious,
+		"account_id":      "WA-PROD-001",
+		"sampled_at":      now.Format(time.RFC3339),
+	})
 }
 
 // extractCommsChannel returns the channel identifier from an event map.

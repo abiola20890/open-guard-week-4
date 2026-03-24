@@ -212,6 +212,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/commsguard/events", s.handleCommsGuardEvents)
 	mux.HandleFunc("/api/v1/commsguard/channels", s.handleCommsGuardChannels)
 	mux.HandleFunc("/api/v1/commsguard/config", s.handleCommsGuardConfig)
+	mux.HandleFunc("/api/v1/commsguard/linked-devices", s.handleCommsLinkedDevices)
 
 	// AgentGuard-specific endpoints.
 	mux.HandleFunc("/api/v1/agentguard/stats", s.handleAgentGuardStats)

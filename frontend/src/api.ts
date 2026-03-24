@@ -425,6 +425,24 @@ export interface CommsChannelUpdate {
   webhook_url?: string;
 }
 
+export interface LinkedDevice {
+  device_id: string;
+  platform: string;  // iOS, Android, Web, Desktop
+  name: string;
+  linked_at: string;
+  last_active: string;
+  suspicious: boolean;
+  status: 'active' | 'inactive';
+}
+
+export interface LinkedDevicesResponse {
+  devices: LinkedDevice[];
+  total: number;
+  suspicious_count: number;
+  account_id: string;
+  sampled_at: string;
+}
+
 // ─── HostGuard types ─────────────────────────────────────────────────────────
 
 export interface HostEventTypeStat {
@@ -659,6 +677,7 @@ export const api = {
   commsConfig: () => get<CommsConfigResponse>('/api/v1/commsguard/config'),
   updateCommsChannel: (channel: CommsChannelUpdate) =>
     postJSON<{ status: string }>('/api/v1/commsguard/config', { channel }),
+  commsLinkedDevices: () => get<LinkedDevicesResponse>('/api/v1/commsguard/linked-devices'),
 
   // ModelGuard endpoints
   modelGuardStats: () => get<ModelGuardStatsResponse>('/api/v1/modelguard/stats'),
