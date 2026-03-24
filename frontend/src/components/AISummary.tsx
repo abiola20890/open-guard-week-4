@@ -41,6 +41,12 @@ export default function AISummary({ data, loading, error, onRefresh }: AISummary
               cached
             </span>
           )}
+          <span style={{
+            fontSize: '0.7rem', color: '#475569',
+            border: '1px solid #334155', borderRadius: '4px', padding: '1px 6px',
+          }}>
+            ↻ 5 min
+          </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           {data?.generated_at && (

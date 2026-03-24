@@ -77,6 +77,9 @@ type Server struct {
 
 	// modelGuard holds ModelGuard runtime state (audit entries, guardrail config).
 	modelGuard *modelGuardState
+
+	// configStore holds all runtime-mutable configuration for all domains.
+	configStore *domainConfigStore
 }
 
 // NewServer constructs a new console API Server.
@@ -135,6 +138,7 @@ func NewServer(cfg Config, ledger *auditled.Ledger, events *EventStore, incident
 		commsConfig:     newCommsConfig(),
 		agentGuardStore: newAgentStore(),
 		modelGuard:      newModelGuardState(),
+		configStore:     newDomainConfigStore(),
 	}
 	s.activeProvider.Store(provider)
 	return s
@@ -228,6 +232,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/modelguard/providers", s.handleModelGuardProviders)
 	mux.HandleFunc("/api/v1/modelguard/guardrails", s.handleModelGuardGuardrails)
 	mux.HandleFunc("/api/v1/modelguard/requests", s.handleModelGuardRequests)
+
+	// Unified per-domain configuration CRUD endpoints.
+	mux.HandleFunc("/api/v1/config/", s.handleConfigPrefix)
 
 	// Incident detail and action endpoints — matched by prefix.
 	mux.HandleFunc("/api/v1/incidents/", s.handleIncidentActions)
@@ -508,13 +515,36 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	eventID := r.URL.Query().Get("event_id")
+	page := 1
+	if p := r.URL.Query().Get("page"); p != "" {
+		if n, err := strconv.Atoi(p); err == nil && n > 0 {
+			page = n
+		}
+	}
+	const pageSize = 100
 	entries, err := s.ledger.GetByEventID(r.Context(), eventID)
 	if err != nil {
 		s.logger.Error("console api: audit query failed", zap.Error(err))
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"entries": entries})
+	total := len(entries)
+	// Apply pagination.
+	start := (page - 1) * pageSize
+	end := start + pageSize
+	if start >= total {
+		entries = nil
+	} else {
+		if end > total {
+			end = total
+		}
+		entries = entries[start:end]
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"entries": entries,
+		"page":    page,
+		"total":   total,
+	})
 }
 
 // handleSensors handles GET /api/v1/sensors, returning metadata for all

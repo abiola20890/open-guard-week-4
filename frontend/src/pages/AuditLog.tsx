@@ -1,21 +1,24 @@
 import { useEffect, useReducer, useState } from 'react';
 import { api, type AuditEntry } from '../api';
+import Pagination from '../components/Pagination';
+
+const PAGE_SIZE = 100;
 
 type FetchState =
   | { status: 'idle' }
   | { status: 'loading' }
-  | { status: 'success'; entries: AuditEntry[] }
+  | { status: 'success'; entries: AuditEntry[]; total: number }
   | { status: 'error'; error: string };
 
 type FetchAction =
   | { type: 'loading' }
-  | { type: 'success'; entries: AuditEntry[] }
+  | { type: 'success'; entries: AuditEntry[]; total: number }
   | { type: 'error'; error: string };
 
 function fetchReducer(_: FetchState, action: FetchAction): FetchState {
   switch (action.type) {
     case 'loading': return { status: 'loading' };
-    case 'success': return { status: 'success', entries: action.entries };
+    case 'success': return { status: 'success', entries: action.entries, total: action.total };
     case 'error': return { status: 'error', error: action.error };
   }
 }
@@ -24,20 +27,22 @@ export default function AuditLog() {
   const [state, dispatch] = useReducer(fetchReducer, { status: 'loading' } as FetchState);
   const [filter, setFilter] = useState('');
   const [queryEventId, setQueryEventId] = useState<string | undefined>(undefined);
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
     let cancelled = false;
     dispatch({ type: 'loading' });
-    api.audit(queryEventId)
-      .then((res) => { if (!cancelled) dispatch({ type: 'success', entries: res.entries }); })
+    api.audit(queryEventId, page)
+      .then((res) => { if (!cancelled) dispatch({ type: 'success', entries: res.entries ?? [], total: res.total ?? 0 }); })
       .catch((err: unknown) => {
         if (!cancelled) dispatch({ type: 'error', error: err instanceof Error ? err.message : String(err) });
       });
     return () => { cancelled = true; };
-  }, [queryEventId]);
+  }, [queryEventId, page]);
 
   function handleSearch(e: React.FormEvent) {
     e.preventDefault();
+    setPage(1);
     setQueryEventId(filter.trim() || undefined);
   }
 
@@ -86,7 +91,7 @@ export default function AuditLog() {
 
       <div className="table-card">
         <div className="table-header">
-          Audit Entries — {state.status === 'success' ? state.entries.length : 0} records
+          Audit Entries — {state.status === 'success' ? state.total : 0} total
         </div>
         {state.status === 'loading' ? (
           <div className="loading">Loading…</div>
@@ -123,6 +128,13 @@ export default function AuditLog() {
           </table>
         )}
       </div>
+
+      <Pagination
+        page={page}
+        total={state.status === 'success' ? state.total : 0}
+        pageSize={PAGE_SIZE}
+        onPageChange={(p) => { setPage(p); }}
+      />
     </div>
   );
 }

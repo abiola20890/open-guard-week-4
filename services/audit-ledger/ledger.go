@@ -59,7 +59,8 @@ func NewLedger(cfg Config, logger *zap.Logger) *Ledger {
 	return &Ledger{cfg: cfg, logger: logger}
 }
 
-// Open opens (or creates) the backing storage file.
+// Open opens (or creates) the backing storage file and loads existing entries
+// into the in-memory cache so that queries work immediately after restart.
 // It must be called before Append.
 func (l *Ledger) Open() error {
 	l.mu.Lock()
@@ -67,6 +68,22 @@ func (l *Ledger) Open() error {
 	if l.cfg.StoragePath == "" {
 		return nil // in-memory mode; entries are logged but not persisted.
 	}
+
+	// Load existing entries from the NDJSON file into memory.
+	if rf, err := os.Open(l.cfg.StoragePath); err == nil {
+		defer rf.Close()
+		dec := json.NewDecoder(rf)
+		for dec.More() {
+			var entry AuditEntry
+			if err := dec.Decode(&entry); err != nil {
+				break // stop on first malformed line
+			}
+			l.entries = append(l.entries, entry)
+			l.prevHash = entry.Hash
+			l.sequence++
+		}
+	}
+
 	f, err := os.OpenFile(l.cfg.StoragePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("audit ledger: open file: %w", err)

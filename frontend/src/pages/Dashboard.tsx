@@ -141,6 +141,11 @@ export default function Dashboard() {
   useEffect(() => { fetchAll(); }, [fetchAll]);
   // Keep a REST polling fallback at 5 s in case the SSE connection drops.
   useInterval(fetchAll, 5000);
+  // Auto-regenerate the AI summary every 5 minutes.
+  useInterval(
+    () => fetchSummary(events, incidents, sysStats, hostStats, agentStats, modelStats, commsStats, true),
+    5 * 60 * 1000,
+  );
 
   // Build the SSE URL, passing the JWT as a query param (EventSource can't
   // send custom headers, so the backend accepts ?token= as a fallback).

@@ -35,9 +35,18 @@ export default function Events() {
   useInterval(fetchEvents, 30000);
 
   const filtered = events.filter((ev) => {
-    if (filterType && !(ev.type ?? '').toLowerCase().includes(filterType.toLowerCase())) return false;
-    if (filterTier !== 'All' && ev.tier !== parseInt(filterTier.slice(1))) return false;
-    if (filterSource && !(ev.source ?? '').toLowerCase().includes(filterSource.toLowerCase())) return false;
+    const evType = String(ev.type ?? (ev.metadata as Record<string, unknown> | null)?.event_type ?? '');
+    if (filterType && !evType.toLowerCase().includes(filterType.toLowerCase())) return false;
+    if (filterTier !== 'All') {
+      const evTierStr = typeof ev.tier === 'number' ? `T${ev.tier}` : String(ev.tier ?? '');
+      if (evTierStr !== filterTier) return false;
+    }
+    const evSource = typeof ev.source === 'string'
+      ? ev.source
+      : ev.source != null && typeof ev.source === 'object'
+        ? Object.values(ev.source as Record<string, unknown>).filter(Boolean).join(' ')
+        : '';
+    if (filterSource && !evSource.toLowerCase().includes(filterSource.toLowerCase())) return false;
     return true;
   });
 
@@ -97,13 +106,24 @@ export default function Events() {
             <tbody>
               {filtered.map((ev, i) => (
                 <tr key={ev.id ?? i}>
-                  <td><code>{ev.id ?? '—'}</code></td>
-                  <td>{ev.type ?? '—'}</td>
-                  <td>{ev.source ?? '—'}</td>
+                  <td><code>{String(ev.id ?? ev.event_id ?? '—')}</code></td>
+                  <td>{String(ev.type ?? (ev.metadata as Record<string, unknown> | null)?.event_type ?? '—')}</td>
                   <td>
-                    {ev.tier !== undefined ? (
-                      <span className={`badge badge-t${ev.tier}`}>T{ev.tier}</span>
-                    ) : '—'}
+                    {ev.source == null
+                      ? '—'
+                      : typeof ev.source === 'string'
+                        ? ev.source || '—'
+                        : (() => {
+                            const src = ev.source as Record<string, unknown>;
+                            return String([src.adapter, src.host_id].filter(Boolean).join(' / ') || '—');
+                          })()
+                    }
+                  </td>
+                  <td>
+                    {ev.tier !== undefined ? (() => {
+                      const t = typeof ev.tier === 'number' ? `T${ev.tier}` : String(ev.tier);
+                      return <span className={`badge badge-${t.toLowerCase()}`}>{t}</span>;
+                    })() : '—'}
                   </td>
                   <td>{ev.risk_score ?? '—'}</td>
                   <td>{ev.timestamp ?? '—'}</td>

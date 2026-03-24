@@ -42,6 +42,16 @@ async function del<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+async function putJSON<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json() as Promise<T>;
+}
+
 /** Build a query string from a record, omitting undefined/empty values. */
 function buildQuery(params: Record<string, string | undefined>): string {
   const parts: string[] = [];
@@ -72,11 +82,13 @@ export interface EventsResponse {
 
 export interface Event {
   id?: string;
+  event_id?: string;
   type?: string;
-  source?: string;
-  tier?: number;
+  source?: string | Record<string, unknown>;
+  tier?: number | string;
   risk_score?: number;
   timestamp?: string;
+  metadata?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -109,6 +121,8 @@ export interface AuditEntry {
 
 export interface AuditResponse {
   entries: AuditEntry[];
+  page: number;
+  total: number;
 }
 
 export interface ActionResponse {
@@ -450,6 +464,109 @@ export interface HostRulesResponse {
   total: number;
 }
 
+// ─── Config API types ────────────────────────────────────────────────────────
+
+export interface StatusResponse {
+  status: string;
+  [key: string]: unknown;
+}
+
+export interface RuleOverride {
+  enabled: boolean;
+  severity?: string;
+  tier?: string;
+}
+
+export interface HostSensorConfig {
+  scan_interval_secs: number;
+  cpu_alert_threshold_pct: number;
+  mem_alert_threshold_mb: number;
+}
+
+export interface ConfiguredHostRule extends HostRule {
+  // same as HostRule but with overrides applied
+}
+
+export interface HostGuardConfigResponse {
+  sensor_config: HostSensorConfig;
+  rules: ConfiguredHostRule[];
+}
+
+export interface ConfiguredAgentRule extends AgentRule {
+  // same as AgentRule but with overrides applied
+}
+
+export interface AgentGuardConfigResponse {
+  rules: ConfiguredAgentRule[];
+}
+
+export interface AgentToolConfig {
+  agent_id: string;
+  agent_name: string;
+  approved_tools: string[];
+  approved_domains: string[];
+  token_quota: number;
+  call_quota: number;
+  created_at?: string;
+}
+
+export interface AgentToolsResponse {
+  tools: AgentToolConfig[];
+}
+
+export interface CommsChannelConfigPatch {
+  enabled: boolean;
+  webhook_secret?: string;
+  verify_token?: string;
+  account_sid?: string;
+  bearer_token?: string;
+  bot_token?: string;
+  webhook_url?: string;
+}
+
+export interface CommsChannelConfigEntry {
+  enabled: boolean;
+  webhook_secret?: string;
+  verify_token?: string;
+  account_sid?: string;
+  bearer_token?: string;
+  bot_token?: string;
+  webhook_url?: string;
+}
+
+export interface CommsGlobalConfig {
+  content_analysis?: boolean;
+  bulk_threshold?: number;
+  bulk_window_sec?: number;
+}
+
+export interface CommsGuardConfigResponse {
+  content_analysis: boolean;
+  bulk_threshold: number;
+  bulk_window_sec: number;
+  channels: Record<string, CommsChannelConfigEntry>;
+}
+
+export interface PolicyRule {
+  id: string;
+  description: string;
+  action: 'block' | 'require_approval' | 'allow';
+  policy_ref: string;
+  enabled: boolean;
+  conditions: string[];
+}
+
+export type PolicyRuleInput = Omit<PolicyRule, 'id'> & { id?: string };
+
+export interface PoliciesResponse {
+  policies: PolicyRule[];
+}
+
+export interface CreatePolicyResponse {
+  status: string;
+  id: string;
+}
+
 // ─── API functions ───────────────────────────────────────────────────────────
 
 export const api = {
@@ -457,8 +574,8 @@ export const api = {
   events: (page?: number) => get<EventsResponse>(`/api/v1/events${page !== undefined ? `?page=${page}` : ''}`),
   incidents: (page?: number) => get<IncidentsResponse>(`/api/v1/incidents${page !== undefined ? `?page=${page}` : ''}`),
   incident: (id: string) => get<IncidentDetailResponse>(`/api/v1/incidents/${encodeURIComponent(id)}`),
-  audit: (eventId?: string) =>
-    get<AuditResponse>(`/api/v1/audit${eventId ? `?event_id=${encodeURIComponent(eventId)}` : ''}`),
+  audit: (eventId?: string, page?: number) =>
+    get<AuditResponse>(`/api/v1/audit${buildQuery({ event_id: eventId, page: page !== undefined ? String(page) : undefined })}`),
   incidentAction: (id: string, action: 'approve' | 'deny' | 'override') =>
     post<ActionResponse>(`/api/v1/incidents/${encodeURIComponent(id)}/${action}`),
   sensors: () => get<SensorsResponse>('/api/v1/sensors'),
@@ -526,4 +643,46 @@ export const api = {
       })}`,
     ),
   hostGuardRules: () => get<HostRulesResponse>('/api/v1/hostguard/rules'),
+
+  // ── Config API ──────────────────────────────────────────────────────────────
+
+  // HostGuard config
+  configHostGuard: () => get<HostGuardConfigResponse>('/api/v1/config/hostguard'),
+  updateHostGuardSensor: (cfg: HostSensorConfig) =>
+    putJSON<StatusResponse>('/api/v1/config/hostguard', cfg),
+  updateHostGuardRule: (id: string, override: RuleOverride) =>
+    putJSON<StatusResponse>(`/api/v1/config/hostguard/rules/${encodeURIComponent(id)}`, override),
+
+  // AgentGuard config
+  configAgentGuard: () => get<AgentGuardConfigResponse>('/api/v1/config/agentguard'),
+  updateAgentGuardRule: (id: string, override: RuleOverride) =>
+    putJSON<StatusResponse>(`/api/v1/config/agentguard/rules/${encodeURIComponent(id)}`, override),
+  listAgentTools: () => get<AgentToolsResponse>('/api/v1/config/agentguard/tools'),
+  createAgentTool: (cfg: AgentToolConfig) =>
+    postJSON<StatusResponse>('/api/v1/config/agentguard/tools', cfg),
+  updateAgentTool: (id: string, cfg: Partial<AgentToolConfig>) =>
+    putJSON<StatusResponse>(`/api/v1/config/agentguard/tools/${encodeURIComponent(id)}`, cfg),
+  deleteAgentTool: (id: string) =>
+    del<StatusResponse>(`/api/v1/config/agentguard/tools/${encodeURIComponent(id)}`),
+
+  // CommsGuard config
+  configCommsGuard: () => get<CommsGuardConfigResponse>('/api/v1/config/commsguard'),
+  updateCommsGuardGlobal: (cfg: CommsGlobalConfig) =>
+    putJSON<StatusResponse>('/api/v1/config/commsguard', cfg),
+  updateCommsGuardChannel: (id: string, cfg: CommsChannelConfigPatch) =>
+    putJSON<StatusResponse>(`/api/v1/config/commsguard/channels/${encodeURIComponent(id)}`, cfg),
+
+  // ModelGuard config
+  configModelGuard: () => get<GuardrailConfig>('/api/v1/config/modelguard'),
+  updateModelGuardConfig: (cfg: GuardrailConfig) =>
+    putJSON<StatusResponse>('/api/v1/config/modelguard', cfg),
+
+  // Policies config
+  listPolicies: () => get<PoliciesResponse>('/api/v1/config/policies'),
+  createPolicy: (rule: PolicyRuleInput) =>
+    postJSON<CreatePolicyResponse>('/api/v1/config/policies', rule),
+  updatePolicy: (id: string, rule: PolicyRuleInput) =>
+    putJSON<StatusResponse>(`/api/v1/config/policies/${encodeURIComponent(id)}`, rule),
+  deletePolicy: (id: string) =>
+    del<StatusResponse>(`/api/v1/config/policies/${encodeURIComponent(id)}`),
 };

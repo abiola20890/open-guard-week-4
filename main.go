@@ -42,6 +42,34 @@ func (a *incidentSinkAdapter) Add(inc *orchestrator.OrchestratorIncident) {
 	})
 }
 
+// eventPipeline chains the detection service with the response orchestrator so
+// that every ingested event is (1) scored and stored, then (2) dispatched for
+// policy evaluation, audit logging, and tier-appropriate response.
+type eventPipeline struct {
+	detect *detect.Service
+	orch   *orchestrator.Orchestrator
+}
+
+func (p *eventPipeline) HandleEvent(ctx context.Context, event map[string]interface{}) error {
+	// Step 1: score, enrich, and persist the event.
+	if err := p.detect.HandleEvent(ctx, event); err != nil {
+		return err
+	}
+	// Step 2: dispatch to the orchestrator for policy evaluation and response.
+	// The proposed action is derived from the tier assigned by detection.
+	tier, _ := event["tier"].(string)
+	proposedAction := "auto_monitor"
+	switch tier {
+	case "T2":
+		proposedAction = "request_approval"
+	case "T3":
+		proposedAction = "containment"
+	case "T4":
+		proposedAction = "emergency_lockdown"
+	}
+	return p.orch.Dispatch(ctx, event, proposedAction)
+}
+
 func main() {
 // Load .env file if present (silently ignored when absent so production
 // deployments that inject env vars directly are unaffected).
@@ -104,11 +132,14 @@ ApprovalTimeout: 30 * time.Minute,
 IncidentSink:    &incidentSinkAdapter{store: incidentStore},
 }, pe, ledger, logger)
 
+// Wire detection + orchestration into a single pipeline handler.
+pipeline := &eventPipeline{detect: detectSvc, orch: orch}
+
 // Initialize ingest service.
 ingestSvc, err := ingest.NewService(ingest.Config{
 NATSUrl:  natsURL,
 SchemaPath: getEnv("SCHEMA_PATH", "./schemas/unified-event.schema.json"),
-}, detectSvc, orch, logger)
+}, pipeline, nil, logger)
 if err != nil {
 logger.Fatal("failed to initialize ingest service", zap.Error(err))
 }

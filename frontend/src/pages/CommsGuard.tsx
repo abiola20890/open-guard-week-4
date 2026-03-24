@@ -6,6 +6,10 @@ import {
   type CommsEventsResponse,
   type CommsConfigResponse,
   type CommsChannelConfigItem,
+  type CommsGuardConfigResponse,
+  type CommsGlobalConfig,
+  type CommsChannelConfigPatch,
+  type CommsChannelConfigEntry,
   type Event,
 } from '../api';
 import { useInterval } from '../hooks/useInterval';
@@ -46,6 +50,15 @@ const CHANNEL_FILTER_OPTIONS = [
   { value: 'twilio_sms', label: 'Twilio SMS' },
   { value: 'twilio_voice', label: 'Twilio Voice' },
   { value: 'twitter', label: 'Twitter / X' },
+];
+
+const CHANNELS_LIST = [
+  { id: 'whatsapp',     name: 'WhatsApp',     icon: '📱', fields: ['webhook_secret', 'verify_token', 'webhook_url'] },
+  { id: 'telegram',     name: 'Telegram',     icon: '✈️',  fields: ['bot_token', 'webhook_url'] },
+  { id: 'messenger',    name: 'Messenger',    icon: '💬', fields: ['webhook_secret', 'verify_token', 'webhook_url'] },
+  { id: 'twilio_sms',   name: 'Twilio SMS',   icon: '📨', fields: ['account_sid', 'bearer_token', 'webhook_url'] },
+  { id: 'twilio_voice', name: 'Twilio Voice', icon: '📞', fields: ['account_sid', 'bearer_token', 'webhook_url'] },
+  { id: 'twitter',      name: 'Twitter / X',  icon: '🐦', fields: ['webhook_secret', 'bearer_token', 'webhook_url'] },
 ];
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -625,6 +638,22 @@ export default function CommsGuard() {
   // Configure modal state.
   const [modalChannel, setModalChannel] = useState<CommsChannel | null>(null);
 
+  // Tab state.
+  const [tab, setTab] = useState<'overview' | 'events' | 'config'>('overview');
+
+  // Domain config state (Configuration tab).
+  const [domainConfig, setDomainConfig] = useState<CommsGuardConfigResponse | null>(null);
+  const [domainConfigLoading, setDomainConfigLoading] = useState(false);
+  const [domainConfigError, setDomainConfigError] = useState<string | null>(null);
+  const [globalForm, setGlobalForm] = useState<CommsGlobalConfig>({ content_analysis: true, bulk_threshold: 10, bulk_window_sec: 60 });
+  const [globalEditing, setGlobalEditing] = useState(false);
+  const [savingGlobal, setSavingGlobal] = useState(false);
+  const [channelEditId, setChannelEditId] = useState<string | null>(null);
+  const [channelEditForm, setChannelEditForm] = useState<CommsChannelConfigPatch>({ enabled: false });
+  const [savingChannel, setSavingChannel] = useState(false);
+
+  const { addToast } = useToast();
+
   const fetchStats = useCallback(() => {
     api
       .commsStats()
@@ -641,8 +670,65 @@ export default function CommsGuard() {
       .finally(() => setConfigLoading(false));
   }, []);
 
+  const loadDomainConfig = useCallback(async () => {
+    setDomainConfigLoading(true);
+    setDomainConfigError(null);
+    try {
+      const cfg = await api.configCommsGuard();
+      setDomainConfig(cfg);
+      setGlobalForm({ content_analysis: cfg.content_analysis, bulk_threshold: cfg.bulk_threshold, bulk_window_sec: cfg.bulk_window_sec });
+    } catch (e) {
+      setDomainConfigError(e instanceof Error ? e.message : 'Failed to load CommsGuard config');
+    } finally {
+      setDomainConfigLoading(false);
+    }
+  }, []);
+
+  async function saveGlobal() {
+    setSavingGlobal(true);
+    try {
+      await api.updateCommsGuardGlobal(globalForm);
+      setDomainConfig(prev => prev ? {
+        ...prev,
+        content_analysis: globalForm.content_analysis ?? prev.content_analysis,
+        bulk_threshold: globalForm.bulk_threshold ?? prev.bulk_threshold,
+        bulk_window_sec: globalForm.bulk_window_sec ?? prev.bulk_window_sec,
+      } : prev);
+      setGlobalEditing(false);
+      addToast('Global settings saved', 'success');
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : 'Failed to save global settings', 'error');
+    } finally {
+      setSavingGlobal(false);
+    }
+  }
+
+  function openChannelEdit(id: string, entry: CommsChannelConfigEntry | undefined) {
+    setChannelEditId(id);
+    setChannelEditForm({ enabled: entry?.enabled ?? false, webhook_url: entry?.webhook_url });
+  }
+
+  async function saveChannel(id: string) {
+    setSavingChannel(true);
+    try {
+      await api.updateCommsGuardChannel(id, channelEditForm);
+      setDomainConfig(prev => {
+        if (!prev) return prev;
+        return { ...prev, channels: { ...prev.channels, [id]: { ...(prev.channels[id] ?? {}), ...channelEditForm } } };
+      });
+      setChannelEditId(null);
+      const ch = CHANNELS_LIST.find(c => c.id === id);
+      addToast(`${ch?.name ?? id} configuration saved`, 'success');
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : 'Failed to save channel config', 'error');
+    } finally {
+      setSavingChannel(false);
+    }
+  }
+
   useEffect(() => { fetchStats(); fetchConfig(); }, [fetchStats, fetchConfig]);
   useInterval(fetchStats, 20000);
+  useEffect(() => { if (tab === 'config') void loadDomainConfig(); }, [tab, loadDomainConfig]);
 
   const channels = stats?.channels ?? [];
   const eventTypes = stats?.event_types ?? [];
@@ -678,167 +764,347 @@ export default function CommsGuard() {
             Multi-channel communication threat monitoring — WhatsApp, Telegram, Messenger, Twilio, Twitter/X
           </p>
         </div>
-        <button className="btn-secondary" onClick={() => { fetchStats(); fetchConfig(); }}>
+        <button className="btn-secondary" onClick={() => { fetchStats(); fetchConfig(); if (tab === 'config') void loadDomainConfig(); }}>
           ↻ Refresh
         </button>
       </div>
 
       {error && <div className="error-msg">⚠️ {error}</div>}
 
-      {/* ── Statistics Row ───────────────────────────────────────────────── */}
-      {statsLoading ? (
-        <div className="loading">Loading statistics…</div>
-      ) : (
-        <div className="card-grid">
-          <StatCard label="Total Comms Events" value={stats?.total_events ?? 0} />
-          <StatCard
-            label="Threats Detected"
-            value={stats?.total_threats ?? 0}
-            color={(stats?.total_threats ?? 0) > 0 ? '#f87171' : undefined}
-          />
-          <StatCard
-            label="Channels Monitored"
-            value={channels.filter((c) => c.configured).length}
-          />
-          <StatCard
-            label="Active Threat Channels"
-            value={threatChannels.length}
-            color={threatChannels.length > 0 ? '#fbbf24' : undefined}
-          />
-        </div>
-      )}
-
-      {/* ── Channel Cards Grid ───────────────────────────────────────────── */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
-          gap: '1rem',
-          marginBottom: '1.5rem',
-        }}
-      >
-        {(statsLoading ? [] : channels).map((ch) => (
-          <ChannelCard
-            key={ch.id}
-            channel={ch}
-            onConfigure={handleOpenModal}
-          />
+      {/* ─── Tabs ─────────────────────────────────────────────────────────── */}
+      <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '1.5rem', borderBottom: '1px solid #334155' }}>
+        {(['overview', 'events', 'config'] as const).map(t => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            style={{
+              padding: '0.625rem 1.25rem',
+              background: 'none',
+              border: 'none',
+              borderBottom: `2px solid ${tab === t ? '#3b82f6' : 'transparent'}`,
+              color: tab === t ? '#60a5fa' : '#64748b',
+              fontWeight: 600,
+              fontSize: '0.875rem',
+              cursor: 'pointer',
+              transition: 'color 0.12s, border-color 0.12s',
+              marginBottom: '-1px',
+            }}
+          >
+            {t === 'overview' ? 'Overview' : t === 'events' ? 'Events' : '⚙️ Configuration'}
+          </button>
         ))}
       </div>
 
-      {/* ── Threat Distribution + Global Config ─────────────────────────── */}
-      <div className="card-grid">
-        {/* Threat event-type breakdown */}
-        <div className="card">
-          <div className="section-title">Threat Event Type Breakdown</div>
-          {eventTypes.length === 0 ? (
-            <div style={{ color: '#475569', fontSize: '0.875rem' }}>
-              No comms events recorded yet.
-            </div>
+      {/* ─── Overview tab ─────────────────────────────────────────────────── */}
+      {tab === 'overview' && (
+        <div>
+          {/* Statistics Row */}
+          {statsLoading ? (
+            <div className="loading">Loading statistics…</div>
           ) : (
-            eventTypes.map((et) => (
-              <ThreatBar
-                key={et.type}
-                label={et.type}
-                count={et.count}
-                max={maxEventTypeCount}
-                color={EVENT_TYPE_COLORS[et.type] ?? '#64748b'}
+            <div className="card-grid">
+              <StatCard label="Total Comms Events" value={stats?.total_events ?? 0} />
+              <StatCard
+                label="Threats Detected"
+                value={stats?.total_threats ?? 0}
+                color={(stats?.total_threats ?? 0) > 0 ? '#f87171' : undefined}
               />
-            ))
+              <StatCard
+                label="Channels Monitored"
+                value={channels.filter((c) => c.configured).length}
+              />
+              <StatCard
+                label="Active Threat Channels"
+                value={threatChannels.length}
+                color={threatChannels.length > 0 ? '#fbbf24' : undefined}
+              />
+            </div>
           )}
-        </div>
 
-        {/* Global CommsGuard configuration */}
-        {!configLoading && config && (
-          <div className="card">
-            <div className="section-title">Global Settings</div>
-            <table>
-              <tbody>
-                <tr>
-                  <td style={{ color: '#64748b', fontSize: '0.8125rem' }}>Content Analysis</td>
-                  <td>
-                    <span
+          {/* Channel Cards Grid */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+              gap: '1rem',
+              marginBottom: '1.5rem',
+            }}
+          >
+            {(statsLoading ? [] : channels).map((ch) => (
+              <ChannelCard
+                key={ch.id}
+                channel={ch}
+                onConfigure={handleOpenModal}
+              />
+            ))}
+          </div>
+
+          {/* Threat Distribution + Global Config */}
+          <div className="card-grid">
+            <div className="card">
+              <div className="section-title">Threat Event Type Breakdown</div>
+              {eventTypes.length === 0 ? (
+                <div style={{ color: '#475569', fontSize: '0.875rem' }}>
+                  No comms events recorded yet.
+                </div>
+              ) : (
+                eventTypes.map((et) => (
+                  <ThreatBar
+                    key={et.type}
+                    label={et.type}
+                    count={et.count}
+                    max={maxEventTypeCount}
+                    color={EVENT_TYPE_COLORS[et.type] ?? '#64748b'}
+                  />
+                ))
+              )}
+            </div>
+
+            {!configLoading && config && (
+              <div className="card">
+                <div className="section-title">Global Settings</div>
+                <table>
+                  <tbody>
+                    <tr>
+                      <td style={{ color: '#64748b', fontSize: '0.8125rem' }}>Content Analysis</td>
+                      <td>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 700, color: config.enable_content_analysis ? '#86efac' : '#f87171' }}>
+                          {config.enable_content_analysis ? 'Enabled' : 'Disabled'}
+                        </span>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td style={{ color: '#64748b', fontSize: '0.8125rem' }}>Bulk Message Threshold</td>
+                      <td>
+                        <code style={{ color: '#a3e635', fontSize: '0.8125rem' }}>
+                          {config.bulk_message_threshold} msgs
+                        </code>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td style={{ color: '#64748b', fontSize: '0.8125rem' }}>Bulk Window</td>
+                      <td>
+                        <code style={{ color: '#a3e635', fontSize: '0.8125rem' }}>
+                          {config.bulk_message_window_sec}s
+                        </code>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div style={{ marginTop: '1.25rem' }}>
+                  <div className="section-title" style={{ marginBottom: '0.75rem' }}>
+                    Detection Rules
+                  </div>
+                  {[
+                    { id: 'COMMS-001', name: 'Phishing Detection', tiers: 'T1–T3', active: true },
+                    { id: 'COMMS-002', name: 'Data Exfiltration', tiers: 'T1–T4', active: true },
+                  ].map((rule) => (
+                    <div
+                      key={rule.id}
                       style={{
-                        fontSize: '0.75rem',
-                        fontWeight: 700,
-                        color: config.enable_content_analysis ? '#86efac' : '#f87171',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '0.5rem 0.75rem',
+                        background: '#0f172a',
+                        borderRadius: '6px',
+                        marginBottom: '0.5rem',
+                        border: '1px solid #1e293b',
                       }}
                     >
-                      {config.enable_content_analysis ? 'Enabled' : 'Disabled'}
-                    </span>
-                  </td>
-                </tr>
-                <tr>
-                  <td style={{ color: '#64748b', fontSize: '0.8125rem' }}>Bulk Message Threshold</td>
-                  <td>
-                    <code style={{ color: '#a3e635', fontSize: '0.8125rem' }}>
-                      {config.bulk_message_threshold} msgs
-                    </code>
-                  </td>
-                </tr>
-                <tr>
-                  <td style={{ color: '#64748b', fontSize: '0.8125rem' }}>Bulk Window</td>
-                  <td>
-                    <code style={{ color: '#a3e635', fontSize: '0.8125rem' }}>
-                      {config.bulk_message_window_sec}s
-                    </code>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-
-            <div style={{ marginTop: '1.25rem' }}>
-              <div className="section-title" style={{ marginBottom: '0.75rem' }}>
-                Detection Rules
-              </div>
-              {[
-                { id: 'COMMS-001', name: 'Phishing Detection', tiers: 'T1–T3', active: true },
-                { id: 'COMMS-002', name: 'Data Exfiltration', tiers: 'T1–T4', active: true },
-              ].map((rule) => (
-                <div
-                  key={rule.id}
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    padding: '0.5rem 0.75rem',
-                    background: '#0f172a',
-                    borderRadius: '6px',
-                    marginBottom: '0.5rem',
-                    border: '1px solid #1e293b',
-                  }}
-                >
-                  <div>
-                    <div style={{ fontSize: '0.8125rem', color: '#f1f5f9' }}>{rule.name}</div>
-                    <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
-                      <code>{rule.id}</code> · tiers {rule.tiers}
+                      <div>
+                        <div style={{ fontSize: '0.8125rem', color: '#f1f5f9' }}>{rule.name}</div>
+                        <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                          <code>{rule.id}</code> · tiers {rule.tiers}
+                        </div>
+                      </div>
+                      <span
+                        style={{
+                          fontSize: '0.65rem',
+                          fontWeight: 700,
+                          padding: '0.125rem 0.5rem',
+                          borderRadius: '9999px',
+                          background: '#14532d',
+                          color: '#86efac',
+                          border: '1px solid #166534',
+                        }}
+                      >
+                        ACTIVE
+                      </span>
                     </div>
-                  </div>
-                  <span
-                    style={{
-                      fontSize: '0.65rem',
-                      fontWeight: 700,
-                      padding: '0.125rem 0.5rem',
-                      borderRadius: '9999px',
-                      background: '#14532d',
-                      color: '#86efac',
-                      border: '1px solid #166534',
-                    }}
-                  >
-                    ACTIVE
-                  </span>
+                  ))}
                 </div>
-              ))}
-            </div>
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* ── Events Table ─────────────────────────────────────────────────── */}
-      <CommsEventsTable
-        channelFilter={channelFilter}
-        onChannelChange={setChannelFilter}
-      />
+      {/* ─── Events tab ───────────────────────────────────────────────────── */}
+      {tab === 'events' && (
+        <CommsEventsTable
+          channelFilter={channelFilter}
+          onChannelChange={setChannelFilter}
+        />
+      )}
+
+      {/* ─── Config tab ───────────────────────────────────────────────────── */}
+      {tab === 'config' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          {domainConfigLoading && (
+            <>
+              <div className="loading-skeleton" style={{ height: '8rem', borderRadius: '8px' }} />
+              <div className="loading-skeleton" style={{ height: '20rem', borderRadius: '8px' }} />
+            </>
+          )}
+          {domainConfigError && (
+            <div className="error-msg" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span>⚠️ {domainConfigError}</span>
+              <button onClick={() => void loadDomainConfig()} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', textDecoration: 'underline', fontWeight: 600 }}>Retry</button>
+            </div>
+          )}
+          {!domainConfigLoading && !domainConfigError && domainConfig && (
+            <>
+              {/* Global Settings */}
+              <div className="card">
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+                  <div className="section-title">🌐 Global Settings</div>
+                  {!globalEditing ? (
+                    <button className="btn-secondary" onClick={() => setGlobalEditing(true)}>Edit</button>
+                  ) : (
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <button className="btn-secondary" onClick={() => { setGlobalEditing(false); setGlobalForm({ content_analysis: domainConfig.content_analysis, bulk_threshold: domainConfig.bulk_threshold, bulk_window_sec: domainConfig.bulk_window_sec }); }}>Cancel</button>
+                      <button onClick={() => void saveGlobal()} disabled={savingGlobal} style={{ padding: '0.375rem 1rem', background: '#1d4ed8', border: '1px solid #2563eb', borderRadius: '6px', color: '#fff', fontWeight: 600, cursor: savingGlobal ? 'not-allowed' : 'pointer', opacity: savingGlobal ? 0.7 : 1, fontSize: '0.875rem' }}>
+                        {savingGlobal ? 'Saving…' : 'Save'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '1.25rem' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.7rem', color: '#94a3b8', marginBottom: '0.375rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Content Analysis</label>
+                    {globalEditing ? (
+                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        <button onClick={() => setGlobalForm(f => ({ ...f, content_analysis: true }))} style={{ flex: 1, padding: '0.5rem', borderRadius: '6px', border: globalForm.content_analysis ? '2px solid #22c55e' : '1px solid #334155', background: globalForm.content_analysis ? '#14532d' : '#0f172a', color: globalForm.content_analysis ? '#4ade80' : '#64748b', fontWeight: 600, cursor: 'pointer', fontSize: '0.875rem' }}>Enabled</button>
+                        <button onClick={() => setGlobalForm(f => ({ ...f, content_analysis: false }))} style={{ flex: 1, padding: '0.5rem', borderRadius: '6px', border: !globalForm.content_analysis ? '2px solid #475569' : '1px solid #334155', background: !globalForm.content_analysis ? '#1e293b' : '#0f172a', color: !globalForm.content_analysis ? '#94a3b8' : '#64748b', fontWeight: 600, cursor: 'pointer', fontSize: '0.875rem' }}>Disabled</button>
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: '1.25rem', fontWeight: 700, color: domainConfig.content_analysis ? '#4ade80' : '#f87171' }}>
+                        {domainConfig.content_analysis ? '● Enabled' : '○ Disabled'}
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.7rem', color: '#94a3b8', marginBottom: '0.375rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Bulk Message Threshold</label>
+                    {globalEditing ? (
+                      <input type="number" min={1} max={1000} value={globalForm.bulk_threshold ?? 10}
+                        onChange={e => setGlobalForm(f => ({ ...f, bulk_threshold: Number(e.target.value) }))}
+                        style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: '6px', padding: '0.5rem 0.75rem', color: '#f1f5f9', fontSize: '0.9375rem' }}
+                      />
+                    ) : (
+                      <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#60a5fa' }}>{domainConfig.bulk_threshold} msgs</div>
+                    )}
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.7rem', color: '#94a3b8', marginBottom: '0.375rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Bulk Window (seconds)</label>
+                    {globalEditing ? (
+                      <input type="number" min={1} max={86400} value={globalForm.bulk_window_sec ?? 60}
+                        onChange={e => setGlobalForm(f => ({ ...f, bulk_window_sec: Number(e.target.value) }))}
+                        style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: '6px', padding: '0.5rem 0.75rem', color: '#f1f5f9', fontSize: '0.9375rem' }}
+                      />
+                    ) : (
+                      <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#a78bfa' }}>{domainConfig.bulk_window_sec}s</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Per-channel Configuration */}
+              <div className="card">
+                <div className="section-title" style={{ marginBottom: '1rem' }}>📡 Channel Configuration</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                  {CHANNELS_LIST.map(ch => {
+                    const entry = domainConfig.channels[ch.id];
+                    const isEditing = channelEditId === ch.id;
+                    return (
+                      <div key={ch.id} style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '8px', padding: '1rem', borderLeft: `3px solid ${entry?.enabled ? '#16a34a' : '#334155'}` }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: isEditing ? '1rem' : 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}>
+                            <span style={{ fontSize: '1.125rem' }}>{ch.icon}</span>
+                            <span style={{ fontWeight: 600, color: '#f1f5f9', fontSize: '0.9375rem' }}>{ch.name}</span>
+                            <span style={{ fontSize: '0.65rem', fontWeight: 700, padding: '0.1rem 0.45rem', borderRadius: '9999px', background: entry?.enabled ? '#14532d' : '#1e293b', color: entry?.enabled ? '#86efac' : '#475569', border: `1px solid ${entry?.enabled ? '#166534' : '#334155'}` }}>
+                              {entry?.enabled ? 'ENABLED' : 'DISABLED'}
+                            </span>
+                          </div>
+                          <div style={{ display: 'flex', gap: '0.5rem' }}>
+                            {isEditing ? (
+                              <>
+                                <button className="btn-secondary" onClick={() => setChannelEditId(null)} style={{ fontSize: '0.75rem', padding: '0.25rem 0.625rem' }}>Cancel</button>
+                                <button onClick={() => void saveChannel(ch.id)} disabled={savingChannel} style={{ fontSize: '0.75rem', padding: '0.25rem 0.75rem', background: '#1d4ed8', border: '1px solid #2563eb', borderRadius: '6px', color: '#fff', fontWeight: 600, cursor: savingChannel ? 'not-allowed' : 'pointer', opacity: savingChannel ? 0.7 : 1 }}>
+                                  {savingChannel ? 'Saving…' : 'Save'}
+                                </button>
+                              </>
+                            ) : (
+                              <button className="btn-secondary" onClick={() => openChannelEdit(ch.id, entry)} style={{ fontSize: '0.75rem', padding: '0.25rem 0.625rem' }}>Edit</button>
+                            )}
+                          </div>
+                        </div>
+                        {isEditing && (
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '0.875rem' }}>
+                            <div>
+                              <label style={{ display: 'block', fontSize: '0.7rem', color: '#94a3b8', marginBottom: '0.375rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Status</label>
+                              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                <button onClick={() => setChannelEditForm(f => ({ ...f, enabled: true }))} style={{ flex: 1, padding: '0.375rem', borderRadius: '6px', border: channelEditForm.enabled ? '2px solid #22c55e' : '1px solid #334155', background: channelEditForm.enabled ? '#14532d' : '#0f172a', color: channelEditForm.enabled ? '#4ade80' : '#64748b', fontWeight: 600, cursor: 'pointer', fontSize: '0.8rem' }}>Enabled</button>
+                                <button onClick={() => setChannelEditForm(f => ({ ...f, enabled: false }))} style={{ flex: 1, padding: '0.375rem', borderRadius: '6px', border: !channelEditForm.enabled ? '2px solid #475569' : '1px solid #334155', background: !channelEditForm.enabled ? '#1e293b' : '#0f172a', color: !channelEditForm.enabled ? '#94a3b8' : '#64748b', fontWeight: 600, cursor: 'pointer', fontSize: '0.8rem' }}>Disabled</button>
+                              </div>
+                            </div>
+                            {ch.fields.includes('webhook_secret') && (
+                              <div>
+                                <label style={{ display: 'block', fontSize: '0.7rem', color: '#94a3b8', marginBottom: '0.375rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Webhook Secret</label>
+                                <input type="password" placeholder="Enter new secret…" value={channelEditForm.webhook_secret ?? ''} onChange={e => setChannelEditForm(f => ({ ...f, webhook_secret: e.target.value || undefined }))} style={{ width: '100%', background: '#1e293b', border: '1px solid #334155', borderRadius: '6px', padding: '0.4rem 0.6rem', color: '#f1f5f9', fontSize: '0.875rem', boxSizing: 'border-box' }} />
+                              </div>
+                            )}
+                            {ch.fields.includes('verify_token') && (
+                              <div>
+                                <label style={{ display: 'block', fontSize: '0.7rem', color: '#94a3b8', marginBottom: '0.375rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Verify Token</label>
+                                <input type="password" placeholder="Enter verify token…" value={channelEditForm.verify_token ?? ''} onChange={e => setChannelEditForm(f => ({ ...f, verify_token: e.target.value || undefined }))} style={{ width: '100%', background: '#1e293b', border: '1px solid #334155', borderRadius: '6px', padding: '0.4rem 0.6rem', color: '#f1f5f9', fontSize: '0.875rem', boxSizing: 'border-box' }} />
+                              </div>
+                            )}
+                            {ch.fields.includes('bot_token') && (
+                              <div>
+                                <label style={{ display: 'block', fontSize: '0.7rem', color: '#94a3b8', marginBottom: '0.375rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Bot Token</label>
+                                <input type="password" placeholder="Enter bot token…" value={channelEditForm.bot_token ?? ''} onChange={e => setChannelEditForm(f => ({ ...f, bot_token: e.target.value || undefined }))} style={{ width: '100%', background: '#1e293b', border: '1px solid #334155', borderRadius: '6px', padding: '0.4rem 0.6rem', color: '#f1f5f9', fontSize: '0.875rem', boxSizing: 'border-box' }} />
+                              </div>
+                            )}
+                            {ch.fields.includes('account_sid') && (
+                              <div>
+                                <label style={{ display: 'block', fontSize: '0.7rem', color: '#94a3b8', marginBottom: '0.375rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Account SID</label>
+                                <input type="text" placeholder="AC…" value={channelEditForm.account_sid ?? ''} onChange={e => setChannelEditForm(f => ({ ...f, account_sid: e.target.value || undefined }))} style={{ width: '100%', background: '#1e293b', border: '1px solid #334155', borderRadius: '6px', padding: '0.4rem 0.6rem', color: '#f1f5f9', fontSize: '0.875rem', boxSizing: 'border-box' }} />
+                              </div>
+                            )}
+                            {ch.fields.includes('bearer_token') && (
+                              <div>
+                                <label style={{ display: 'block', fontSize: '0.7rem', color: '#94a3b8', marginBottom: '0.375rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Auth / Bearer Token</label>
+                                <input type="password" placeholder="Enter token…" value={channelEditForm.bearer_token ?? ''} onChange={e => setChannelEditForm(f => ({ ...f, bearer_token: e.target.value || undefined }))} style={{ width: '100%', background: '#1e293b', border: '1px solid #334155', borderRadius: '6px', padding: '0.4rem 0.6rem', color: '#f1f5f9', fontSize: '0.875rem', boxSizing: 'border-box' }} />
+                              </div>
+                            )}
+                            {ch.fields.includes('webhook_url') && (
+                              <div style={{ gridColumn: 'span 2' }}>
+                                <label style={{ display: 'block', fontSize: '0.7rem', color: '#94a3b8', marginBottom: '0.375rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Webhook URL</label>
+                                <input type="url" placeholder="https://openguard.example.com" value={channelEditForm.webhook_url ?? ''} onChange={e => setChannelEditForm(f => ({ ...f, webhook_url: e.target.value || undefined }))} style={{ width: '100%', background: '#1e293b', border: '1px solid #334155', borderRadius: '6px', padding: '0.4rem 0.6rem', color: '#f1f5f9', fontSize: '0.875rem', boxSizing: 'border-box' }} />
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {/* ── Configuration Modal ──────────────────────────────────────────── */}
       {modalChannel && (
@@ -852,3 +1118,4 @@ export default function CommsGuard() {
     </div>
   );
 }
+
