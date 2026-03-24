@@ -10,8 +10,6 @@ import {
   type CommsGlobalConfig,
   type CommsChannelConfigPatch,
   type CommsChannelConfigEntry,
-  type LinkedDevice,
-  type LinkedDevicesResponse,
   type Event,
   type WAStatus,
   type WAQRData,
@@ -57,7 +55,6 @@ const EVENT_TYPE_COLORS: Record<string, string> = {
 const CHANNEL_FILTER_OPTIONS = [
   { value: '', label: 'All Channels' },
   { value: 'whatsapp', label: 'WhatsApp' },
-  { value: 'whatsapp_linked', label: 'WhatsApp Linked Devices' },
   { value: 'telegram', label: 'Telegram' },
   { value: 'messenger', label: 'Messenger' },
   { value: 'twilio_sms', label: 'Twilio SMS' },
@@ -67,7 +64,6 @@ const CHANNEL_FILTER_OPTIONS = [
 
 const CHANNELS_LIST = [
   { id: 'whatsapp',        name: 'WhatsApp',               icon: '📱', fields: ['webhook_secret', 'verify_token', 'webhook_url'] },
-  { id: 'whatsapp_linked', name: 'WhatsApp Linked Devices', icon: '📲', fields: ['webhook_secret', 'bearer_token', 'webhook_url'] },
   { id: 'telegram',        name: 'Telegram',               icon: '✈️',  fields: ['bot_token', 'webhook_url'] },
   { id: 'messenger',       name: 'Messenger',              icon: '💬', fields: ['webhook_secret', 'verify_token', 'webhook_url'] },
   { id: 'twilio_sms',      name: 'Twilio SMS',             icon: '📨', fields: ['account_sid', 'bearer_token', 'webhook_url'] },
@@ -79,7 +75,6 @@ const CHANNELS_LIST = [
 
 const WEBHOOK_PATHS: { id: string; label: string; path: string }[] = [
   { id: 'whatsapp',        label: 'WhatsApp',              path: '/whatsapp/webhook' },
-  { id: 'whatsapp_linked', label: 'Linked Devices',        path: '/whatsapp/linked-devices/webhook' },
   { id: 'telegram',        label: 'Telegram',              path: '/telegram/webhook' },
   { id: 'messenger',       label: 'Messenger',             path: '/messenger/webhook' },
   { id: 'twilio_sms',      label: 'Twilio SMS',            path: '/twilio/sms' },
@@ -485,11 +480,11 @@ function ConfigModal({ channel, configItem, onClose, onSaved }: ConfigModalProps
     }
   }
 
-  const showWebhookSecret = ['whatsapp', 'whatsapp_linked', 'messenger', 'twitter'].includes(channel.id);
+  const showWebhookSecret = ['whatsapp', 'messenger', 'twitter'].includes(channel.id);
   const showVerifyToken = ['whatsapp', 'messenger'].includes(channel.id);
   const showBotToken = channel.id === 'telegram';
   const showAccountSID = ['twilio_sms', 'twilio_voice'].includes(channel.id);
-  const showBearerToken = ['twitter', 'twilio_sms', 'twilio_voice', 'whatsapp_linked'].includes(channel.id);
+  const showBearerToken = ['twitter', 'twilio_sms', 'twilio_voice'].includes(channel.id);
 
   return (
     <div
@@ -649,154 +644,6 @@ function ConfigModal({ channel, configItem, onClose, onSaved }: ConfigModalProps
           </button>
         </div>
       </div>
-    </div>
-  );
-}
-
-// ─── Linked Devices Panel ─────────────────────────────────────────────────────
-
-const PLATFORM_ICONS: Record<string, string> = {
-  iOS: '🍎',
-  Android: '🤖',
-  Web: '🌐',
-  Desktop: '🖥️',
-};
-
-function LinkedDevicesPanel() {
-  const [data, setData] = useState<LinkedDevicesResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-
-  const fetchDevices = useCallback(() => {
-    setLoading(true);
-    api.commsLinkedDevices()
-      .then(setData)
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => { fetchDevices(); }, [fetchDevices]);
-  useInterval(fetchDevices, 30000);
-
-  const devices: LinkedDevice[] = data?.devices ?? [];
-  const suspiciousCount = data?.suspicious_count ?? 0;
-
-  return (
-    <div className="card" style={{ borderLeft: `3px solid ${suspiciousCount > 0 ? '#dc2626' : '#22c55e'}` }}>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}>
-          <span style={{ fontSize: '1.25rem' }}>📲</span>
-          <div>
-            <div style={{ fontWeight: 700, color: '#f1f5f9', fontSize: '0.9375rem' }}>
-              WhatsApp Linked Devices
-            </div>
-            {data && (
-              <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
-                Account <code style={{ color: '#94a3b8' }}>{data.account_id}</code>
-                {' · '}
-                {data.total} device{data.total !== 1 ? 's' : ''}
-              </div>
-            )}
-          </div>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          {suspiciousCount > 0 && (
-            <span style={{
-              fontSize: '0.7rem', fontWeight: 700, padding: '0.2rem 0.6rem',
-              borderRadius: '9999px', background: '#450a0a', color: '#fca5a5',
-              border: '1px solid #7f1d1d',
-            }}>
-              ⚠️ {suspiciousCount} SUSPICIOUS
-            </span>
-          )}
-          <button className="btn-secondary" onClick={fetchDevices} style={{ fontSize: '0.75rem', padding: '0.25rem 0.6rem' }}>↻</button>
-        </div>
-      </div>
-
-      {error && <div className="error-msg">⚠️ {error}</div>}
-
-      {loading ? (
-        <div className="loading">Loading linked devices…</div>
-      ) : devices.length === 0 ? (
-        <div className="empty-state">No linked devices found. Configure the WhatsApp Linked Devices channel to start monitoring.</div>
-      ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '0.75rem' }}>
-          {devices.map((dev) => (
-            <div
-              key={dev.device_id}
-              style={{
-                background: '#0f172a',
-                border: `1px solid ${dev.suspicious ? '#7f1d1d' : dev.status === 'active' ? '#1e3a5f' : '#1e293b'}`,
-                borderLeft: `3px solid ${dev.suspicious ? '#dc2626' : dev.status === 'active' ? '#3b82f6' : '#334155'}`,
-                borderRadius: '8px',
-                padding: '0.875rem',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <span style={{ fontSize: '1.25rem' }}>{PLATFORM_ICONS[dev.platform] ?? '📱'}</span>
-                  <div>
-                    <div style={{ fontSize: '0.875rem', fontWeight: 600, color: '#f1f5f9' }}>{dev.name}</div>
-                    <div style={{ fontSize: '0.7rem', color: '#64748b' }}>{dev.platform}</div>
-                  </div>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.25rem' }}>
-                  <span style={{
-                    fontSize: '0.6rem', fontWeight: 700, padding: '0.1rem 0.45rem',
-                    borderRadius: '9999px',
-                    background: dev.status === 'active' ? '#052e16' : '#1e293b',
-                    color: dev.status === 'active' ? '#4ade80' : '#64748b',
-                    border: `1px solid ${dev.status === 'active' ? '#166534' : '#334155'}`,
-                  }}>
-                    {dev.status.toUpperCase()}
-                  </span>
-                  {dev.suspicious && (
-                    <span style={{
-                      fontSize: '0.6rem', fontWeight: 700, padding: '0.1rem 0.45rem',
-                      borderRadius: '9999px', background: '#450a0a', color: '#fca5a5',
-                      border: '1px solid #7f1d1d',
-                    }}>
-                      ⚠️ SUSPICIOUS
-                    </span>
-                  )}
-                </div>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', marginTop: '0.5rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem' }}>
-                  <span style={{ color: '#64748b' }}>Device ID</span>
-                  <code style={{ color: '#475569' }}>{dev.device_id}</code>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem' }}>
-                  <span style={{ color: '#64748b' }}>Linked</span>
-                  <span style={{ color: '#94a3b8' }}>{new Date(dev.linked_at).toLocaleDateString()}</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem' }}>
-                  <span style={{ color: '#64748b' }}>Last Active</span>
-                  <span style={{ color: '#94a3b8' }}>{new Date(dev.last_active).toLocaleString()}</span>
-                </div>
-              </div>
-              {dev.suspicious && (
-                <div style={{ marginTop: '0.625rem', padding: '0.375rem 0.5rem', background: '#450a0a', border: '1px solid #7f1d1d', borderRadius: '6px', fontSize: '0.7rem', color: '#fca5a5' }}>
-                  This device was linked recently from an unrecognised location. Review and revoke if unauthorized.
-                </div>
-              )}
-              <button
-                style={{
-                  marginTop: '0.625rem', width: '100%', padding: '0.35rem',
-                  background: dev.suspicious ? '#7f1d1d' : '#1e293b',
-                  border: `1px solid ${dev.suspicious ? '#dc2626' : '#334155'}`,
-                  borderRadius: '6px', color: dev.suspicious ? '#fca5a5' : '#64748b',
-                  fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer',
-                }}
-                title="Revoke — remove this linked device session"
-              >
-                {dev.suspicious ? '🚫 Revoke Device' : 'Revoke'}
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -1378,13 +1225,6 @@ export default function CommsGuard() {
               />
             ))}
           </div>
-
-          {/* WhatsApp Linked Devices */}
-          {channels.some((c) => c.id === 'whatsapp_linked') && (
-            <div style={{ marginBottom: '1.5rem' }}>
-              <LinkedDevicesPanel />
-            </div>
-          )}
 
           {/* WhatsApp Live Session (QR-based) */}
           <div style={{ marginBottom: '1.5rem' }}>
