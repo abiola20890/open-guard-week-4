@@ -225,6 +225,11 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/hostguard/events", s.handleHostGuardEvents)
 	mux.HandleFunc("/api/v1/hostguard/rules", s.handleHostGuardRules)
 
+	// NetworkGuard-specific endpoints.
+	mux.HandleFunc("/api/v1/networkguard/stats", s.handleNetworkGuardStats)
+	mux.HandleFunc("/api/v1/networkguard/events", s.handleNetworkGuardEvents)
+	mux.HandleFunc("/api/v1/networkguard/rules", s.handleNetworkGuardRules)
+
 	// ModelGuard-specific endpoints (all dispatched through a single prefix handler).
 	mux.HandleFunc("/api/v1/modelguard/", s.handleModelGuardPrefix)
 	mux.HandleFunc("/api/v1/modelguard/stats", s.handleModelGuardStats)

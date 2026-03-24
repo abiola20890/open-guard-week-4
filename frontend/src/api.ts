@@ -169,6 +169,7 @@ export interface SystemStats {
   mem_total_mb: number;
   mem_used_mb: number;
   mem_used_pct: number;
+  mem_apps: { name: string; mem_mb: number }[];
   sampled_at: string;
 }
 
@@ -464,6 +465,48 @@ export interface HostRulesResponse {
   total: number;
 }
 
+// ─── NetworkGuard types ───────────────────────────────────────────────────────
+
+export interface NetEventTypeStat {
+  type: string;
+  count: number;
+}
+
+export interface NetStatsResponse {
+  total_events: number;
+  threat_events: number;
+  unique_sources: number;
+  blocked_flows: number;
+  active_rules: number;
+  event_types: NetEventTypeStat[];
+  protocol_breakdown: Record<string, number>;
+  tier_breakdown: Record<string, number>;
+  period: string;
+  computed_at: string;
+}
+
+export interface NetEventsResponse {
+  events: Event[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface NetRule {
+  id: string;
+  name: string;
+  description: string;
+  severity: string;
+  tier: string;
+  responses: string[];
+  enabled: boolean;
+}
+
+export interface NetRulesResponse {
+  rules: NetRule[];
+  total: number;
+}
+
 // ─── Config API types ────────────────────────────────────────────────────────
 
 export interface StatusResponse {
@@ -643,6 +686,19 @@ export const api = {
       })}`,
     ),
   hostGuardRules: () => get<HostRulesResponse>('/api/v1/hostguard/rules'),
+
+  // NetworkGuard endpoints
+  networkGuardStats: () => get<NetStatsResponse>('/api/v1/networkguard/stats'),
+  networkGuardEvents: (eventType?: string, sourceIp?: string, direction?: string, page?: number) =>
+    get<NetEventsResponse>(
+      `/api/v1/networkguard/events${buildQuery({
+        event_type: eventType,
+        source_ip: sourceIp,
+        direction,
+        page: page !== undefined ? String(page) : undefined,
+      })}`,
+    ),
+  networkGuardRules: () => get<NetRulesResponse>('/api/v1/networkguard/rules'),
 
   // ── Config API ──────────────────────────────────────────────────────────────
 

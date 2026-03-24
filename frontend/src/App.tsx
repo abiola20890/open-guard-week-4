@@ -17,6 +17,7 @@ import CommsGuard from './pages/CommsGuard';
 import AgentGuard from './pages/AgentGuard';
 import ModelGuard from './pages/ModelGuard';
 import HostGuard from './pages/HostGuard';
+import NetworkGuard from './pages/NetworkGuard';
 
 export default function App() {
   return (
@@ -39,6 +40,7 @@ export default function App() {
                 <Route path="agentguard" element={<AgentGuard />} />
                 <Route path="modelguard" element={<ModelGuard />} />
                 <Route path="hostguard" element={<HostGuard />} />
+                <Route path="networkguard" element={<NetworkGuard />} />
               </Route>
             </Route>
             <Route path="*" element={<NotFound />} />

@@ -145,6 +145,84 @@ func readMemInfo() (totalMB, availMB float64) {
 	return float64(totalKB) / 1024, float64(availKB) / 1024
 }
 
+// MemAppStat holds per-application (process-name) resident memory in MB.
+type MemAppStat struct {
+	Name  string  `json:"name"`
+	MemMB float64 `json:"mem_mb"`
+}
+
+// readTopProcessMemory scans /proc/*/status to collect VmRSS per process name,
+// aggregates by name, and returns the top-N entries plus an "Other" bucket.
+// Errors reading individual processes are silently ignored.
+func readTopProcessMemory(topN int) []MemAppStat {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil
+	}
+
+	totals := map[string]float64{}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		// Only numeric dirs are PIDs.
+		pid := e.Name()
+		if len(pid) == 0 || pid[0] < '0' || pid[0] > '9' {
+			continue
+		}
+		data, err := os.ReadFile("/proc/" + pid + "/status")
+		if err != nil {
+			continue
+		}
+		var name string
+		var vmRSSKB float64
+		for _, line := range strings.Split(string(data), "\n") {
+			switch {
+			case strings.HasPrefix(line, "Name:"):
+				name = strings.TrimSpace(strings.TrimPrefix(line, "Name:"))
+			case strings.HasPrefix(line, "VmRSS:"):
+				fields := strings.Fields(line)
+				if len(fields) >= 2 {
+					v, _ := strconv.ParseFloat(fields[1], 64)
+					vmRSSKB = v
+				}
+			}
+		}
+		if name != "" && vmRSSKB > 0 {
+			totals[name] += vmRSSKB / 1024 // convert kB → MB
+		}
+	}
+
+	// Sort by descending memory.
+	type kv struct {
+		name string
+		mb   float64
+	}
+	sorted := make([]kv, 0, len(totals))
+	for k, v := range totals {
+		sorted = append(sorted, kv{k, v})
+	}
+	for i := 1; i < len(sorted); i++ {
+		for j := i; j > 0 && sorted[j].mb > sorted[j-1].mb; j-- {
+			sorted[j], sorted[j-1] = sorted[j-1], sorted[j]
+		}
+	}
+
+	var result []MemAppStat
+	var otherMB float64
+	for i, kv := range sorted {
+		if i < topN {
+			result = append(result, MemAppStat{Name: kv.name, MemMB: kv.mb})
+		} else {
+			otherMB += kv.mb
+		}
+	}
+	if otherMB > 0 {
+		result = append(result, MemAppStat{Name: "Other", MemMB: otherMB})
+	}
+	return result
+}
+
 // SystemStats is the payload returned by GET /api/v1/system/stats.
 type SystemStats struct {
 	// CPU fields
@@ -154,9 +232,10 @@ type SystemStats struct {
 	LoadAvg5   float64 `json:"load_avg_5m"`
 	LoadAvg15  float64 `json:"load_avg_15m"`
 	// Memory fields
-	MemTotalMB float64 `json:"mem_total_mb"`
-	MemUsedMB  float64 `json:"mem_used_mb"`
-	MemUsedPct float64 `json:"mem_used_pct"` // 0–100 %
+	MemTotalMB float64      `json:"mem_total_mb"`
+	MemUsedMB  float64      `json:"mem_used_mb"`
+	MemUsedPct float64      `json:"mem_used_pct"` // 0–100 %
+	MemApps    []MemAppStat `json:"mem_apps"`     // top processes by RSS
 	// Housekeeping
 	SampledAt string `json:"sampled_at"` // RFC-3339
 }
@@ -192,6 +271,7 @@ func (s *Server) handleSystemStats(w http.ResponseWriter, r *http.Request) {
 		MemTotalMB: totalMB,
 		MemUsedMB:  usedMB,
 		MemUsedPct: memPct,
+		MemApps:    readTopProcessMemory(6),
 		SampledAt:  time.Now().UTC().Format(time.RFC3339),
 	}
 

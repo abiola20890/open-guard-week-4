@@ -13,15 +13,22 @@ import (
 
 // SystemStats is the payload returned by GET /api/v1/system/stats.
 type SystemStats struct {
-	CPUUtilPct float64 `json:"cpu_util_pct"`
-	CPUCores   int     `json:"cpu_cores"`
-	LoadAvg1   float64 `json:"load_avg_1m"`
-	LoadAvg5   float64 `json:"load_avg_5m"`
-	LoadAvg15  float64 `json:"load_avg_15m"`
-	MemTotalMB float64 `json:"mem_total_mb"`
-	MemUsedMB  float64 `json:"mem_used_mb"`
-	MemUsedPct float64 `json:"mem_used_pct"`
-	SampledAt  string  `json:"sampled_at"`
+	CPUUtilPct float64      `json:"cpu_util_pct"`
+	CPUCores   int          `json:"cpu_cores"`
+	LoadAvg1   float64      `json:"load_avg_1m"`
+	LoadAvg5   float64      `json:"load_avg_5m"`
+	LoadAvg15  float64      `json:"load_avg_15m"`
+	MemTotalMB float64      `json:"mem_total_mb"`
+	MemUsedMB  float64      `json:"mem_used_mb"`
+	MemUsedPct float64      `json:"mem_used_pct"`
+	MemApps    []MemAppStat `json:"mem_apps"`
+	SampledAt  string       `json:"sampled_at"`
+}
+
+// MemAppStat holds per-application resident memory in MB.
+type MemAppStat struct {
+	Name  string  `json:"name"`
+	MemMB float64 `json:"mem_mb"`
 }
 
 func (s *Server) handleSystemStats(w http.ResponseWriter, r *http.Request) {
