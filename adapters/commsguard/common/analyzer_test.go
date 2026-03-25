@@ -76,6 +76,18 @@ func TestPhishingWithURL(t *testing.T) {
 	}
 }
 
+// TestExactFailingMessage is the regression test for the reported detection miss.
+// "Click the link to claim your reward of 1million. Https://click.me"
+// — capital H in Https, prize phrase, and a non-shortener URL must all be detected.
+func TestExactFailingMessage(t *testing.T) {
+	a := newAnalyzer()
+	msg := "Click the link to claim your reward of 1million. Https://click.me"
+	indicators := a.Analyze(makeEvent(msg))
+	if !containsIndicator(indicators, "phishing") {
+		t.Errorf("expected 'phishing' indicator for %q, got %v", msg, indicators)
+	}
+}
+
 // TestClickTheLinkWithURL verifies "click the link" now matches as a phishing keyword.
 func TestClickTheLinkWithURL(t *testing.T) {
 	a := newAnalyzer()

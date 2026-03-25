@@ -1263,8 +1263,8 @@ function InterceptFeed({
           isFromMe: msg.from_me,
           isGroup: msg.is_group,
           hasMedia: msg.has_media,
-          isThreat: false,
-          indicators: [],
+          isThreat: msg.is_flagged ?? false,
+          indicators: msg.threats ?? [],
         });
       }
     }

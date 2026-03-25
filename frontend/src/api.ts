@@ -450,6 +450,8 @@ export interface WAMessage {
   has_media: boolean;
   from_me: boolean;
   is_group: boolean;
+  is_flagged: boolean;
+  threats: string[];
 }
 
 export interface WAMessagesResponse {

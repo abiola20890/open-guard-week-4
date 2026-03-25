@@ -24,6 +24,7 @@ import (
 	"time"
 
 	qrcode "github.com/skip2/go-qrcode"
+	commsguardcommon "github.com/DiniMuhd7/openguard/adapters/commsguard/common"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
@@ -49,14 +50,16 @@ const (
 
 // WAMessage is an intercepted WhatsApp message stored in the ring buffer.
 type WAMessage struct {
-	ID        string `json:"id"`
-	Chat      string `json:"chat"`      // JID of the chat (E.164@s.whatsapp.net or group@g.us)
-	Sender    string `json:"sender"`    // phone number of sender
-	Content   string `json:"content"`   // text body, truncated to 500 chars
-	Timestamp string `json:"timestamp"` // RFC3339
-	HasMedia  bool   `json:"has_media"`
-	FromMe    bool   `json:"from_me"`
-	IsGroup   bool   `json:"is_group"`
+	ID        string   `json:"id"`
+	Chat      string   `json:"chat"`      // JID of the chat (E.164@s.whatsapp.net or group@g.us)
+	Sender    string   `json:"sender"`    // phone number of sender
+	Content   string   `json:"content"`   // text body, truncated to 500 chars
+	Timestamp string   `json:"timestamp"` // RFC3339
+	HasMedia  bool     `json:"has_media"`
+	FromMe    bool     `json:"from_me"`
+	IsGroup   bool     `json:"is_group"`
+	IsFlagged bool     `json:"is_flagged"` // true when threat analysis found indicators
+	Threats   []string `json:"threats"`    // threat indicator strings from ThreatAnalyzer
 }
 
 // ─── Response shapes ─────────────────────────────────────────────────────────
@@ -114,6 +117,9 @@ type waSession struct {
 
 	// qrDoneCh is closed by the QR goroutine to signal completion.
 	qrDoneCh chan struct{}
+
+	// analyzer performs heuristic threat analysis on intercepted message content.
+	analyzer *commsguardcommon.ThreatAnalyzer
 }
 
 // newWASession opens the session database and returns a waSession.
@@ -140,6 +146,7 @@ func newWASession(logger *zap.Logger) *waSession {
 		db:        db,
 		logger:    logger,
 		qrDoneCh:  make(chan struct{}),
+		analyzer:  commsguardcommon.NewThreatAnalyzer(0, 0, true),
 	}
 }
 
@@ -372,6 +379,22 @@ func (ws *waSession) interceptMessage(v *events.Message) {
 		v.Message.GetDocumentMessage() != nil ||
 		v.Message.GetStickerMessage() != nil
 
+	// Run threat analysis on the message content.
+	var threats []string
+	if ws.analyzer != nil && body != "" {
+		evt := &commsguardcommon.CommsEvent{
+			Channel:   "whatsapp",
+			SenderID:  v.Info.Sender.User,
+			MessageID: string(v.Info.ID),
+			Content:   body,
+			Timestamp: v.Info.Timestamp,
+		}
+		threats = ws.analyzer.Analyze(evt)
+	}
+	if threats == nil {
+		threats = []string{}
+	}
+
 	msg := WAMessage{
 		ID:        string(v.Info.ID),
 		Chat:      v.Info.Chat.String(),
@@ -381,6 +404,8 @@ func (ws *waSession) interceptMessage(v *events.Message) {
 		HasMedia:  hasMedia,
 		FromMe:    v.Info.IsFromMe,
 		IsGroup:   v.Info.IsGroup,
+		IsFlagged: len(threats) > 0,
+		Threats:   threats,
 	}
 	ws.appendMessage(msg)
 }

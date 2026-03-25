@@ -32,6 +32,10 @@ var phishingKeywords = []string{
 	"verify your account",
 	"click here",
 	"click the link",
+	"tap here",
+	"tap the link",
+	"follow the link",
+	"follow this link",
 	"confirm your identity",
 	"your account will be suspended",
 	"login immediately",
@@ -53,6 +57,8 @@ var phishingKeywords = []string{
 	"unclaimed reward",
 	"collect your reward",
 	"collect your prize",
+	"get your reward",
+	"get your prize",
 	"you are a winner",
 	// Financial lure phrases
 	"million dollar",
@@ -61,6 +67,12 @@ var phishingKeywords = []string{
 	"wire transfer",
 	"send us your",
 	"send your details",
+	// Urgency / expiry pressure
+	"limited time offer",
+	"offer expires",
+	"expires today",
+	"act now",
+	"respond immediately",
 }
 
 // rewardScamKeywords are prize/lottery/reward phrases that signal a scam
@@ -81,6 +93,8 @@ var rewardScamKeywords = []string{
 	"unclaimed reward",
 	"collect your reward",
 	"collect your prize",
+	"get your reward",
+	"get your prize",
 	"you are a winner",
 	"1million",
 	"1 million",
