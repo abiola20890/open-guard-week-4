@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   api,
   type CommsChannel,
@@ -70,6 +70,17 @@ const CHANNELS_LIST = [
   { id: 'twilio_voice',    name: 'Twilio Voice',           icon: '📞', fields: ['account_sid', 'bearer_token', 'webhook_url'] },
   { id: 'twitter',         name: 'Twitter / X',            icon: '🐦', fields: ['webhook_secret', 'bearer_token', 'webhook_url'] },
 ];
+
+// ─── Adapter accent colours & descriptions ────────────────────────────────────
+
+const ADAPTER_META: Record<string, { icon: string; name: string; accentColor: string; description: string }> = {
+  whatsapp:     { icon: '📱', name: 'WhatsApp',     accentColor: '#25d366', description: 'End-to-end encrypted messaging' },
+  telegram:     { icon: '✈️',  name: 'Telegram',     accentColor: '#2ca5e0', description: 'Bot API webhook listener' },
+  messenger:    { icon: '💬', name: 'Messenger',    accentColor: '#0084ff', description: 'Facebook Messenger webhooks' },
+  twilio_sms:   { icon: '📨', name: 'Twilio SMS',   accentColor: '#f22f46', description: 'SMS + MMS via Twilio' },
+  twilio_voice: { icon: '📞', name: 'Twilio Voice', accentColor: '#e0a849', description: 'Voice call monitoring' },
+  twitter:      { icon: '🐦', name: 'Twitter / X',  accentColor: '#1da1f2', description: 'DM + Activity-API stream' },
+};
 
 // ─── TunnelSetupCard ──────────────────────────────────────────────────────────
 
@@ -1011,6 +1022,573 @@ function CommsEventsTable({
 }
 
 // ─── Main CommsGuard Page ─────────────────────────────────────────────────────
+// ─── AdapterStatusGrid ───────────────────────────────────────────────────────
+
+function AdapterStatusGrid({ channels }: { channels: CommsChannel[] }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(172px, 1fr))', gap: '0.75rem' }}>
+      {channels.map((ch) => {
+        const meta = ADAPTER_META[ch.id] ?? { icon: '📡', name: ch.name, accentColor: '#64748b', description: '' };
+        const hasThreat = (ch.threat_count ?? 0) > 0;
+        const borderColor = hasThreat ? '#dc2626' : ch.configured ? meta.accentColor : '#334155';
+        return (
+          <div
+            key={ch.id}
+            style={{
+              background: '#0f172a',
+              border: '1px solid #1e293b',
+              borderLeft: `3px solid ${borderColor}`,
+              borderRadius: '8px',
+              padding: '0.875rem',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
+              <span style={{ fontSize: '1.25rem' }}>{meta.icon}</span>
+              <span
+                style={{
+                  fontSize: '0.6rem', fontWeight: 700, padding: '0.1rem 0.4rem', borderRadius: '9999px',
+                  background: ch.configured ? '#14532d' : '#1e293b',
+                  color: ch.configured ? '#86efac' : '#64748b',
+                  border: `1px solid ${ch.configured ? '#166534' : '#334155'}`,
+                }}
+              >
+                {ch.configured ? 'ON' : 'OFF'}
+              </span>
+            </div>
+            <div style={{ fontSize: '0.8125rem', fontWeight: 700, color: '#f1f5f9', marginBottom: '0.125rem' }}>{meta.name}</div>
+            <div style={{ fontSize: '0.65rem', color: '#475569', marginBottom: '0.625rem' }}>{meta.description}</div>
+            <div style={{ display: 'flex', gap: '1rem' }}>
+              <div>
+                <div style={{ fontSize: '1rem', fontWeight: 700, color: '#cbd5e1' }}>{ch.message_count ?? 0}</div>
+                <div style={{ fontSize: '0.6rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>msgs</div>
+              </div>
+              <div>
+                <div style={{ fontSize: '1rem', fontWeight: 700, color: hasThreat ? '#f87171' : '#334155' }}>{ch.threat_count ?? 0}</div>
+                <div style={{ fontSize: '0.6rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>threats</div>
+              </div>
+            </div>
+            {ch.last_event && (
+              <div style={{ fontSize: '0.6rem', color: '#334155', marginTop: '0.375rem' }}>
+                {new Date(ch.last_event).toLocaleTimeString()}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── WALinkedStats ────────────────────────────────────────────────────────────
+
+function WALinkedStats({
+  status,
+  messages,
+  qrData,
+  onConnect,
+  onLogout,
+}: {
+  status: WAStatus | null;
+  messages: WAMessage[];
+  qrData: WAQRData | null;
+  onConnect: () => void;
+  onLogout: () => void;
+}) {
+  const stateColor =
+    status?.state === 'connected'   ? '#22c55e' :
+    status?.state === 'qr_ready'    ? '#3b82f6' :
+    status?.state === 'connecting'  ? '#f59e0b' : '#475569';
+  const stateLabel = (status?.state ?? 'disconnected').toUpperCase().replace('_', ' ');
+
+  const fromMe    = messages.filter((m) => m.from_me).length;
+  const fromOther = messages.filter((m) => !m.from_me).length;
+  const groupMsgs = messages.filter((m) => m.is_group).length;
+  const mediaMsgs = messages.filter((m) => m.has_media).length;
+
+  const [uptimeTick, setUptimeTick] = useState(0);
+  useEffect(() => {
+    if (status?.state !== 'connected') return;
+    const id = setInterval(() => setUptimeTick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [status?.state]);
+
+  const connectedDuration = useMemo(() => {
+    void uptimeTick;
+    if (!status?.connected_since) return null;
+    const secs = Math.floor((Date.now() - new Date(status.connected_since).getTime()) / 1000);
+    if (secs < 60)   return `${secs}s`;
+    if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+    return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
+  }, [status?.connected_since, uptimeTick]);
+
+  const statCell = (label: string, value: number, color: string) => (
+    <div style={{ background: '#0f172a', borderRadius: '6px', padding: '0.5rem 0.625rem', textAlign: 'center', border: '1px solid #1e293b' }}>
+      <div style={{ fontSize: '1.125rem', fontWeight: 700, color }}>{value}</div>
+      <div style={{ fontSize: '0.6rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em' }}>{label}</div>
+    </div>
+  );
+
+  return (
+    <div className="card" style={{ borderLeft: `3px solid ${stateColor}` }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.875rem' }}>
+        <div>
+          <div style={{ fontWeight: 700, color: '#f1f5f9', fontSize: '0.9rem' }}>📱 WhatsApp Linked Device</div>
+          <div style={{ fontSize: '0.7rem', color: '#64748b' }}>Multi-device protocol · live interception</div>
+        </div>
+        <div style={{ display: 'flex', gap: '0.375rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: '0.6rem', fontWeight: 700, padding: '0.15rem 0.5rem', borderRadius: '9999px', background: '#1e293b', color: stateColor, border: `1px solid ${stateColor}40` }}>
+            {stateLabel}
+          </span>
+          {status?.state !== 'connected' && status?.state !== 'qr_ready' && (
+            <button className="btn-secondary" onClick={onConnect} style={{ fontSize: '0.7rem', padding: '0.2rem 0.6rem' }}>Connect</button>
+          )}
+          {(status?.state === 'connected' || status?.state === 'qr_ready') && (
+            <button className="btn-secondary" onClick={onLogout} style={{ fontSize: '0.7rem', padding: '0.2rem 0.6rem', color: '#f87171' }}>Logout</button>
+          )}
+        </div>
+      </div>
+
+      {status?.state === 'qr_ready' && qrData?.qr_image && (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '1rem', background: '#fff', borderRadius: '10px', marginBottom: '0.875rem' }}>
+          <img src={qrData.qr_image} alt="WhatsApp QR" style={{ width: 240, height: 240 }} />
+          <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: '#1e293b', fontWeight: 500, textAlign: 'center' }}>
+            WhatsApp → Linked Devices → Link a Device
+          </div>
+          {qrData.expires_at && (
+            <div style={{ fontSize: '0.7rem', color: '#475569', marginTop: '0.25rem' }}>
+              Expires {new Date(qrData.expires_at).toLocaleTimeString()}
+            </div>
+          )}
+        </div>
+      )}
+
+      {status?.state === 'connected' && (
+        <>
+          <div style={{ display: 'flex', gap: '0.75rem', padding: '0.625rem 0.875rem', background: '#052e16', borderRadius: '6px', marginBottom: '0.875rem', border: '1px solid #166534', flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: '0.6rem', color: '#4ade80', textTransform: 'uppercase' }}>Phone</div>
+              <div style={{ fontSize: '0.875rem', color: '#f1f5f9', fontWeight: 700 }}>+{status.phone}</div>
+            </div>
+            {status.name && (
+              <div>
+                <div style={{ fontSize: '0.6rem', color: '#4ade80', textTransform: 'uppercase' }}>Account</div>
+                <div style={{ fontSize: '0.875rem', color: '#f1f5f9', fontWeight: 700 }}>{status.name}</div>
+              </div>
+            )}
+            {connectedDuration && (
+              <div>
+                <div style={{ fontSize: '0.6rem', color: '#4ade80', textTransform: 'uppercase' }}>Uptime</div>
+                <div style={{ fontSize: '0.875rem', color: '#f1f5f9' }}>{connectedDuration}</div>
+              </div>
+            )}
+            <div>
+              <div style={{ fontSize: '0.6rem', color: '#4ade80', textTransform: 'uppercase' }}>Session</div>
+              <div style={{ fontSize: '0.875rem', color: '#22c55e', fontWeight: 700 }}>● Active</div>
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem', marginBottom: '0.75rem' }}>
+            {statCell('Total',    status.message_count ?? 0,                                '#60a5fa')}
+            {statCell('Sent',     fromMe,                                                   '#3b82f6')}
+            {statCell('Received', fromOther,                                                '#94a3b8')}
+            {statCell('Groups',   groupMsgs,                                                '#a78bfa')}
+            {statCell('Media',    mediaMsgs,                                                '#fbbf24')}
+            {statCell('Text',     Math.max(0, (status.message_count ?? 0) - mediaMsgs),    '#64748b')}
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 0.75rem', background: '#0f172a', borderRadius: '6px', border: '1px solid #1e293b' }}>
+            <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 6px #22c55e' }} />
+            <span style={{ fontSize: '0.75rem', color: '#4ade80', fontWeight: 600 }}>Session healthy</span>
+            <span style={{ marginLeft: 'auto', fontSize: '0.65rem', color: '#475569' }}>Multi-device protocol</span>
+          </div>
+        </>
+      )}
+
+      {(status?.state === 'disconnected' || !status) && (
+        <div style={{ textAlign: 'center', padding: '1.5rem', color: '#64748b', fontSize: '0.875rem' }}>
+          Not connected — click <strong style={{ color: '#94a3b8' }}>Connect</strong> to link a WhatsApp device via QR code.
+        </div>
+      )}
+      {status?.state === 'connecting' && (
+        <div style={{ textAlign: 'center', padding: '1.25rem', color: '#f59e0b', fontSize: '0.875rem' }}>Connecting…</div>
+      )}
+    </div>
+  );
+}
+
+// ─── InterceptFeed ────────────────────────────────────────────────────────────
+
+interface FeedItem {
+  id: string;
+  channel: string;
+  channelIcon: string;
+  sender: string;
+  content: string;
+  timestamp: string;
+  isFromMe: boolean;
+  isGroup: boolean;
+  hasMedia: boolean;
+  isThreat: boolean;
+  threatType?: string;
+  riskScore?: number;
+  tier?: number;
+  indicators: string[];
+}
+
+function InterceptFeed({
+  waMessages,
+  commsEvents,
+  channelFilter,
+  onChannelChange,
+}: {
+  waMessages: WAMessage[];
+  commsEvents: Event[];
+  channelFilter: string;
+  onChannelChange: (ch: string) => void;
+}) {
+  const [showThreatsOnly, setShowThreatsOnly] = useState(false);
+
+  const feedItems: FeedItem[] = useMemo(() => {
+    const items: FeedItem[] = [];
+
+    if (!channelFilter || channelFilter === 'whatsapp') {
+      for (const msg of waMessages) {
+        items.push({
+          id: `wa-${msg.id}`,
+          channel: 'whatsapp',
+          channelIcon: '📱',
+          sender: msg.from_me ? 'You' : `+${msg.sender}`,
+          content: msg.has_media && !msg.content ? '📎 [media attachment]' : (msg.content || '[no content]'),
+          timestamp: msg.timestamp,
+          isFromMe: msg.from_me,
+          isGroup: msg.is_group,
+          hasMedia: msg.has_media,
+          isThreat: false,
+          indicators: [],
+        });
+      }
+    }
+
+    for (const ev of commsEvents) {
+      const meta = ev.metadata as Record<string, unknown> | undefined;
+      const evChannel = (() => {
+        if (ev.source && typeof ev.source === 'object') {
+          const src = ev.source as Record<string, unknown>;
+          if (src.adapter) return String(src.adapter);
+        }
+        return meta?.channel ? String(meta.channel) : 'unknown';
+      })();
+      if (channelFilter && evChannel !== channelFilter) continue;
+      if (evChannel === 'whatsapp' && (!channelFilter || channelFilter !== 'whatsapp')) continue;
+      const evType = meta?.event_type ? String(meta.event_type) : (ev.type ?? 'unknown');
+      const isThreat = evType !== 'message_received' && evType !== 'unknown' && evType !== '';
+      const adMeta = ADAPTER_META[evChannel] ?? { icon: '📡', name: evChannel, accentColor: '#64748b', description: '' };
+      items.push({
+        id: String(ev.id ?? ev.event_id ?? Math.random()),
+        channel: evChannel,
+        channelIcon: adMeta.icon,
+        sender: meta?.sender_id ? String(meta.sender_id) : '—',
+        content: meta?.content
+          ? String(meta.content)
+          : isThreat ? `⚠️ ${evType.replace(/_/g, ' ')}` : '[message intercepted]',
+        timestamp: String(ev.timestamp ?? ''),
+        isFromMe: false,
+        isGroup: false,
+        hasMedia: false,
+        isThreat,
+        threatType: isThreat ? evType : undefined,
+        riskScore: typeof ev.risk_score === 'number' ? ev.risk_score : undefined,
+        tier: typeof ev.tier === 'number' ? ev.tier : undefined,
+        indicators: Array.isArray(ev.indicators) ? (ev.indicators as string[]) : [],
+      });
+    }
+
+    items.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    return items;
+  }, [waMessages, commsEvents, channelFilter]);
+
+  const displayItems = showThreatsOnly ? feedItems.filter((i) => i.isThreat) : feedItems;
+
+  return (
+    <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+      <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid #334155', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
+        <div style={{ fontWeight: 600, color: '#f1f5f9', fontSize: '0.875rem' }}>
+          📨 Live Intercept Feed
+          <span style={{ marginLeft: '0.5rem', color: '#64748b', fontWeight: 400, fontSize: '0.8125rem' }}>
+            {displayItems.length} {showThreatsOnly ? 'threat' : 'msg'}{displayItems.length !== 1 ? 's' : ''}
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <button
+            onClick={() => setShowThreatsOnly((v) => !v)}
+            style={{
+              fontSize: '0.7rem', padding: '0.25rem 0.625rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 600,
+              border: `1px solid ${showThreatsOnly ? '#dc2626' : '#334155'}`,
+              background: showThreatsOnly ? '#450a0a' : 'transparent',
+              color: showThreatsOnly ? '#f87171' : '#64748b',
+            }}
+          >
+            {showThreatsOnly ? '⚠️ Threats Only' : '☰ All'}
+          </button>
+          <select
+            value={channelFilter}
+            onChange={(e) => onChannelChange(e.target.value)}
+            style={{ fontSize: '0.75rem', background: '#1e293b', border: '1px solid #334155', borderRadius: '6px', padding: '0.25rem 0.5rem', color: '#cbd5e1' }}
+          >
+            {CHANNEL_FILTER_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div style={{ maxHeight: '560px', overflowY: 'auto' }}>
+        {displayItems.length === 0 ? (
+          <div style={{ padding: '2.5rem', textAlign: 'center', color: '#475569', fontSize: '0.875rem' }}>
+            {showThreatsOnly
+              ? 'No threats detected yet across channels.'
+              : 'No messages intercepted yet. Connect a channel or link a WhatsApp device.'}
+          </div>
+        ) : (
+          displayItems.map((item) => (
+            <div
+              key={item.id}
+              style={{
+                padding: '0.625rem 1rem',
+                borderBottom: '1px solid #0f172a',
+                background: item.isThreat
+                  ? 'rgba(127,29,29,0.15)'
+                  : item.isFromMe
+                  ? 'rgba(29,78,216,0.08)'
+                  : 'transparent',
+                borderLeft: `3px solid ${
+                  item.isThreat
+                    ? TIER_COLORS[item.tier ?? 3] ?? '#dc2626'
+                    : item.isFromMe
+                    ? '#1d4ed8'
+                    : '#1e293b'
+                }`,
+                display: 'flex', gap: '0.625rem', alignItems: 'flex-start',
+              }}
+            >
+              <span style={{ fontSize: '0.875rem', flexShrink: 0, marginTop: '0.1rem' }}>{item.channelIcon}</span>
+
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.2rem', gap: '0.5rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '0.7rem', color: '#94a3b8', fontWeight: 600 }}>{item.sender}</span>
+                    <span style={{ fontSize: '0.6rem', color: '#475569', background: '#1e293b', padding: '0.05rem 0.35rem', borderRadius: '9999px' }}>
+                      {item.channel}
+                    </span>
+                    {item.isGroup && (
+                      <span style={{ fontSize: '0.6rem', color: '#64748b', background: '#1e293b', padding: '0.05rem 0.35rem', borderRadius: '9999px' }}>group</span>
+                    )}
+                    {item.hasMedia && (
+                      <span style={{ fontSize: '0.6rem', color: '#a78bfa', background: 'rgba(167,139,250,0.1)', padding: '0.05rem 0.35rem', borderRadius: '9999px', border: '1px solid rgba(167,139,250,0.2)' }}>media</span>
+                    )}
+                    {item.isThreat && item.threatType && (
+                      <span
+                        style={{
+                          fontSize: '0.6rem', fontWeight: 700, padding: '0.1rem 0.4rem', borderRadius: '9999px',
+                          color: EVENT_TYPE_COLORS[item.threatType] ?? '#f87171',
+                          background: 'rgba(127,29,29,0.3)',
+                          border: `1px solid ${(EVENT_TYPE_COLORS[item.threatType] ?? '#f87171')}40`,
+                        }}
+                      >
+                        ⚠ {item.threatType.replace(/_/g, ' ')}
+                      </span>
+                    )}
+                  </div>
+                  <span style={{ fontSize: '0.65rem', color: '#475569', flexShrink: 0 }}>
+                    {item.timestamp ? new Date(item.timestamp).toLocaleTimeString() : '—'}
+                  </span>
+                </div>
+                <div
+                  style={{
+                    fontSize: '0.8125rem',
+                    color: item.isThreat ? '#fca5a5' : '#cbd5e1',
+                    overflow: 'hidden', textOverflow: 'ellipsis',
+                    display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+                  }}
+                >
+                  {item.content}
+                </div>
+                {item.isThreat && item.indicators.length > 0 && (
+                  <div style={{ display: 'flex', gap: '0.25rem', marginTop: '0.3rem', flexWrap: 'wrap' }}>
+                    {item.indicators.slice(0, 4).map((ind, j) => (
+                      <span key={j} style={{ fontSize: '0.6rem', padding: '0.05rem 0.35rem', borderRadius: '9999px', background: '#450a0a', color: '#fca5a5', border: '1px solid #7f1d1d' }}>
+                        {ind}
+                      </span>
+                    ))}
+                    {item.indicators.length > 4 && (
+                      <span style={{ fontSize: '0.6rem', color: '#64748b' }}>+{item.indicators.length - 4}</span>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {item.riskScore !== undefined && (
+                <div style={{ textAlign: 'center', flexShrink: 0, minWidth: 32 }}>
+                  <div style={{ fontSize: '0.875rem', fontWeight: 700, color: item.riskScore > 70 ? '#f87171' : item.riskScore > 40 ? '#fbbf24' : '#64748b' }}>
+                    {Math.round(item.riskScore)}
+                  </div>
+                  <div style={{ fontSize: '0.55rem', color: '#475569', textTransform: 'uppercase' }}>risk</div>
+                </div>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── ThreatAlertBanner ────────────────────────────────────────────────────────
+
+function ThreatAlertBanner({ threatChannels, totalThreats }: { threatChannels: CommsChannel[]; totalThreats: number }) {
+  if (totalThreats === 0) return null;
+  return (
+    <div
+      style={{
+        padding: '0.75rem 1rem', background: 'rgba(127,29,29,0.25)',
+        border: '1px solid #7f1d1d', borderRadius: '8px', marginBottom: '1.25rem',
+        display: 'flex', alignItems: 'center', gap: '0.875rem',
+      }}
+    >
+      <span style={{ fontSize: '1.25rem' }}>🚨</span>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: '0.875rem', fontWeight: 700, color: '#fca5a5' }}>
+          {totalThreats} active threat{totalThreats !== 1 ? 's' : ''} detected across communication channels
+        </div>
+        <div style={{ fontSize: '0.75rem', color: '#f87171', marginTop: '0.125rem' }}>
+          Affected: {threatChannels.map((c) => c.name).join(' · ')}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── InterceptionTab ──────────────────────────────────────────────────────────
+
+function InterceptionTab({ channels, stats }: { channels: CommsChannel[]; stats: CommsStatsResponse | null }) {
+  const [waStatus, setWaStatus]       = useState<WAStatus | null>(null);
+  const [waQrData, setWaQrData]       = useState<WAQRData | null>(null);
+  const [waMessages, setWaMessages]   = useState<WAMessage[]>([]);
+  const [commsEventsData, setCommsEventsData] = useState<CommsEventsResponse | null>(null);
+  const [interceptChannelFilter, setInterceptChannelFilter] = useState('');
+
+  const fetchWaStatus    = useCallback(() => { api.waStatus().then(setWaStatus).catch(() => {}); }, []);
+  const fetchWaQR        = useCallback(() => { api.waQR().then(setWaQrData).catch(() => {}); }, []);
+  const fetchWaMessages  = useCallback(() => { api.waMessages().then((r) => setWaMessages(r.messages)).catch(() => {}); }, []);
+  const fetchCommsEvents = useCallback(() => { api.commsEvents(undefined, 1).then(setCommsEventsData).catch(() => {}); }, []);
+
+  useEffect(() => { fetchWaStatus(); fetchCommsEvents(); }, [fetchWaStatus, fetchCommsEvents]);
+  useInterval(fetchWaStatus, 5000);
+
+  useEffect(() => {
+    if (waStatus?.state === 'qr_ready') fetchWaQR();
+  }, [waStatus?.state, fetchWaQR]);
+  useInterval(() => { if (waStatus?.state === 'qr_ready') fetchWaQR(); }, 20000);
+
+  useEffect(() => {
+    if (waStatus?.state === 'connected') fetchWaMessages();
+  }, [waStatus?.state, fetchWaMessages]);
+  useInterval(() => { if (waStatus?.state === 'connected') fetchWaMessages(); }, 3000);
+  useInterval(fetchCommsEvents, 10000);
+
+  const handleConnect = () => { void api.waConnect().then(fetchWaStatus); };
+  const handleLogout  = () => { void api.waLogout().then(() => { setWaMessages([]); fetchWaStatus(); }); };
+
+  const commsEventsList = commsEventsData?.events ?? [];
+  const threatChannels  = channels.filter((ch) => (ch.threat_count ?? 0) > 0);
+  const waChannel       = channels.find((c) => c.id === 'whatsapp');
+
+  return (
+    <div>
+      <ThreatAlertBanner threatChannels={threatChannels} totalThreats={stats?.total_threats ?? 0} />
+
+      {/* Adapter Status Grid */}
+      <div style={{ marginBottom: '1.25rem' }}>
+        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.625rem' }}>
+          Adapter Status — All Channels
+        </div>
+        <AdapterStatusGrid channels={channels} />
+      </div>
+
+      {/* Two-column layout */}
+      <div style={{ display: 'flex', gap: '1.25rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        {/* Left: Live message feed */}
+        <div style={{ flex: '1 1 380px', minWidth: 0 }}>
+          <InterceptFeed
+            waMessages={waMessages}
+            commsEvents={commsEventsList}
+            channelFilter={interceptChannelFilter}
+            onChannelChange={setInterceptChannelFilter}
+          />
+        </div>
+
+        {/* Right: WA stats + summary */}
+        <div style={{ width: '340px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <WALinkedStats
+            status={waStatus}
+            messages={waMessages}
+            qrData={waQrData}
+            onConnect={handleConnect}
+            onLogout={handleLogout}
+          />
+
+          {/* Per-adapter threat breakdown */}
+          {threatChannels.length > 0 && (
+            <div className="card">
+              <div className="section-title" style={{ marginBottom: '0.75rem' }}>⚠️ Threat Rate by Adapter</div>
+              {threatChannels
+                .sort((a, b) => (b.threat_count ?? 0) - (a.threat_count ?? 0))
+                .map((ch) => {
+                  const meta = ADAPTER_META[ch.id] ?? { icon: '📡', name: ch.name, accentColor: '#dc2626', description: '' };
+                  const maxMsg = Math.max(1, ch.message_count ?? 1);
+                  const pct = Math.round(((ch.threat_count ?? 0) / maxMsg) * 100);
+                  return (
+                    <div key={ch.id} style={{ marginBottom: '0.75rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                        <span style={{ fontSize: '0.8125rem', color: '#cbd5e1' }}>{meta.icon} {meta.name}</span>
+                        <span style={{ fontSize: '0.75rem', color: '#f87171', fontWeight: 600 }}>
+                          {ch.threat_count} ({pct}%)
+                        </span>
+                      </div>
+                      <div style={{ background: '#0f172a', borderRadius: '4px', height: '6px', overflow: 'hidden' }}>
+                        <div style={{ height: '100%', borderRadius: '4px', width: `${Math.min(100, pct)}%`, background: meta.accentColor, transition: 'width 0.4s ease' }} />
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          )}
+
+          {/* Session summary */}
+          <div className="card">
+            <div className="section-title" style={{ marginBottom: '0.75rem' }}>📊 Session Summary</div>
+            <table style={{ width: '100%' }}>
+              <tbody>
+                {[
+                  { label: 'Total Events',    value: stats?.total_events ?? 0,         color: '#60a5fa' },
+                  { label: 'Threats Detected', value: stats?.total_threats ?? 0,        color: (stats?.total_threats ?? 0) > 0 ? '#f87171' : '#64748b' },
+                  { label: 'Active Channels', value: channels.filter((c) => c.configured).length, color: '#4ade80' },
+                  { label: 'WA Messages',     value: waMessages.length,                color: '#25d366' },
+                  { label: 'WA Threat Events', value: waChannel?.threat_count ?? 0,    color: '#f87171' },
+                ].map((row) => (
+                  <tr key={row.label}>
+                    <td style={{ color: '#64748b', fontSize: '0.8125rem', padding: '0.3rem 0' }}>{row.label}</td>
+                    <td style={{ color: row.color, fontWeight: 700, fontSize: '0.9rem', textAlign: 'right' }}>{row.value}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function CommsGuard() {
   const [stats, setStats] = useState<CommsStatsResponse | null>(null);
@@ -1026,7 +1604,7 @@ export default function CommsGuard() {
   const [modalChannel, setModalChannel] = useState<CommsChannel | null>(null);
 
   // Tab state.
-  const [tab, setTab] = useState<'overview' | 'events' | 'config'>('overview');
+  const [tab, setTab] = useState<'overview' | 'interception' | 'events' | 'config'>('overview');
 
   // Domain config state (Configuration tab).
   const [domainConfig, setDomainConfig] = useState<CommsGuardConfigResponse | null>(null);
@@ -1117,6 +1695,9 @@ export default function CommsGuard() {
   useInterval(fetchStats, 20000);
   useEffect(() => { if (tab === 'config') void loadDomainConfig(); }, [tab, loadDomainConfig]);
 
+  // ── Interception tab tracks threat channel list ──
+  // (no extra fetch needed — uses shared stats/channels state)
+
   const channels = stats?.channels ?? [];
   const eventTypes = stats?.event_types ?? [];
   const maxEventTypeCount = eventTypes.reduce((m, e) => Math.max(m, e.count), 1);
@@ -1160,7 +1741,7 @@ export default function CommsGuard() {
 
       {/* ─── Tabs ─────────────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '1.5rem', borderBottom: '1px solid #334155' }}>
-        {(['overview', 'events', 'config'] as const).map(t => (
+        {(['overview', 'interception', 'events', 'config'] as const).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -1177,7 +1758,7 @@ export default function CommsGuard() {
               marginBottom: '-1px',
             }}
           >
-            {t === 'overview' ? 'Overview' : t === 'events' ? 'Events' : '⚙️ Configuration'}
+            {t === 'overview' ? 'Overview' : t === 'interception' ? '🔭 Interception' : t === 'events' ? 'Events' : '⚙️ Configuration'}
           </button>
         ))}
       </div>
@@ -1205,6 +1786,16 @@ export default function CommsGuard() {
                 value={threatChannels.length}
                 color={threatChannels.length > 0 ? '#fbbf24' : undefined}
               />
+            </div>
+          )}
+
+          {/* Adapter status mini-grid */}
+          {!statsLoading && channels.length > 0 && (
+            <div style={{ marginBottom: '1.25rem' }}>
+              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.5rem' }}>
+                Adapter Status
+              </div>
+              <AdapterStatusGrid channels={channels} />
             </div>
           )}
 
@@ -1330,6 +1921,11 @@ export default function CommsGuard() {
             )}
           </div>
         </div>
+      )}
+
+      {/* ─── Interception tab ─────────────────────────────────────────────── */}
+      {tab === 'interception' && (
+        <InterceptionTab channels={channels} stats={stats} />
       )}
 
       {/* ─── Events tab ───────────────────────────────────────────────────── */}
