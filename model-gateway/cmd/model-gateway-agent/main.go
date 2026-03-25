@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -58,6 +59,15 @@ type rateLimiter struct {
 	mu       sync.Mutex
 	counts   map[string][]time.Time
 	limitRPM int
+}
+
+// modelConfigUpdate is the JSON payload published by the console-api on the
+// model-config topic whenever the user changes the active provider or saves/deletes
+// an API key in the Model Settings page. The model-gateway subscribes to this
+// topic so it can hot-swap its active provider without restarting.
+type modelConfigUpdate struct {
+	Provider string `json:"provider"` // gateway name: "codex", "claude", "gemini"
+	APIKey   string `json:"api_key"`  // empty string means the provider was disconnected
 }
 
 func newRateLimiter(limitRPM int) *rateLimiter {
@@ -209,6 +219,11 @@ func main() {
 	)
 
 	// ── Subscribe to model requests ──────────────────────────────────────────
+	// Wrap the router in an atomic pointer so the config-update subscription can
+	// hot-swap it without locking the request handler goroutines.
+	var activeRouter atomic.Pointer[routing.Router]
+	activeRouter.Store(router)
+
 	// Support NATS request-reply: when a caller sets msg.Reply (e.g. via
 	// nc.RequestWithContext), route the result back to that inbox so multiple
 	// concurrent callers each receive their own response.
@@ -217,12 +232,30 @@ func main() {
 		if msg.Reply != "" {
 			replyTo = msg.Reply
 		}
-		handleMessage(msg, nc, replyTo, pipeline, toolChecker, router, auditLedger, strategy, sigSecret, limiter, logger)
+		handleMessage(msg, nc, replyTo, pipeline, toolChecker, &activeRouter, auditLedger, strategy, sigSecret, limiter, logger)
 	})
 	if err != nil {
 		logger.Fatal("model-gateway-agent: failed to subscribe", zap.String("topic", modelTopic), zap.Error(err))
 	}
 	defer sub.Unsubscribe() //nolint:errcheck
+
+	// ── Subscribe to live model-provider config updates ───────────────────────
+	// When the console-api Model Settings page changes the active provider or
+	// saves/deletes an API key, it publishes a modelConfigUpdate message here.
+	// The handler hot-swaps the router so all subsequent requests use the new
+	// provider — no agent restart required.
+	configTopic := envOr("OPENGUARD_CONFIG_TOPIC", "openguard.modelguard.config")
+	configSub, configSubErr := nc.Subscribe(configTopic, func(msg *nats.Msg) {
+		handleConfigUpdate(msg, &activeRouter, logger)
+	})
+	if configSubErr != nil {
+		logger.Warn("model-gateway-agent: failed to subscribe to config topic — live provider updates disabled",
+			zap.String("topic", configTopic), zap.Error(configSubErr))
+	} else {
+		defer configSub.Unsubscribe() //nolint:errcheck
+		logger.Info("model-gateway-agent: subscribed to live model-provider config updates",
+			zap.String("config_topic", configTopic))
+	}
 
 	// ── Prometheus metrics endpoint (localhost only) ──────────────────────────
 	mux := http.NewServeMux()
@@ -295,7 +328,7 @@ func handleMessage(
 	resultTopic string,
 	pipeline *guardrails.Pipeline,
 	toolChecker *toolcheck.ToolIntentChecker,
-	router *routing.Router,
+	activeRouter *atomic.Pointer[routing.Router],
 	auditLedger *audit.AuditLedger,
 	routingStrategy string,
 	sigSecret string,
@@ -389,6 +422,10 @@ func handleMessage(
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	// Load the currently active router atomically — may have been hot-swapped
+	// by a model-provider config update from Model Settings.
+	router := activeRouter.Load()
+
 	dispatchStart := time.Now()
 	result, err := router.Route(ctx, eventCtx, riskLevel)
 	latencyMS := time.Since(dispatchStart).Milliseconds()
@@ -460,6 +497,45 @@ func publishError(nc *nats.Conn, topic, eventID, errMsg string, logger *zap.Logg
 	if err := nc.Publish(topic, data); err != nil {
 		logger.Warn("model-gateway-agent: failed to publish error", zap.Error(err))
 	}
+}
+
+// handleConfigUpdate processes a live model-provider config update published by
+// the console-api when the user changes the active provider or saves an API key
+// in the Model Settings page. It atomically replaces the active router so that
+// all subsequent model requests use the newly configured provider.
+func handleConfigUpdate(msg *nats.Msg, activeRouter *atomic.Pointer[routing.Router], logger *zap.Logger) {
+	var update modelConfigUpdate
+	if err := json.Unmarshal(msg.Data, &update); err != nil {
+		logger.Warn("model-gateway-agent: invalid config update — ignoring",
+			zap.Error(err))
+		return
+	}
+	if update.APIKey == "" {
+		// The provider was disconnected in Model Settings — keep the current router
+		// rather than switching to a provider with no credentials.
+		logger.Info("model-gateway-agent: provider disconnected in Model Settings — router unchanged",
+			zap.String("provider", update.Provider))
+		return
+	}
+
+	var p mg.ModelProvider
+	switch update.Provider {
+	case "codex":
+		p = codex.NewCodexProvider(codex.Config{APIKey: update.APIKey}, logger)
+	case "claude":
+		p = claude.NewClaudeProvider(claude.Config{APIKey: update.APIKey}, logger)
+	case "gemini":
+		p = gemini.NewGeminiProvider(gemini.Config{APIKey: update.APIKey}, logger)
+	default:
+		logger.Warn("model-gateway-agent: unknown provider in config update — ignoring",
+			zap.String("provider", update.Provider))
+		return
+	}
+
+	newRouter := routing.NewRouter([]mg.ModelProvider{p}, routing.Config{PrimaryProviderIndex: 0}, logger)
+	activeRouter.Store(newRouter)
+	logger.Info("model-gateway-agent: hot-swapped to provider from Model Settings",
+		zap.String("provider", update.Provider))
 }
 
 // buildProviders constructs the appropriate model provider(s) based on the

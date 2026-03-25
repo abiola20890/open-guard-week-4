@@ -470,6 +470,12 @@ func (s *Server) handleCredentialSave(w http.ResponseWriter, r *http.Request) {
 	})
 	s.logger.Info("credential saved",
 		zap.String("provider", req.Provider), zap.String("user", username))
+	// If the saved provider is the currently active one, push the new API key to
+	// the model-gateway so it can begin using it without a restart.
+	active, _ := s.activeProvider.Load().(string)
+	if active == req.Provider {
+		s.publishModelConfig(username, req.Provider)
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "connected", "provider": req.Provider})
 }
 
@@ -484,5 +490,11 @@ func (s *Server) handleCredentialDelete(w http.ResponseWriter, r *http.Request) 
 	s.deleteUserCred(username, provider)
 	s.logger.Info("credential removed",
 		zap.String("provider", provider), zap.String("user", username))
+	// If the removed provider is the currently active one, push an empty API key
+	// so the model-gateway knows it can no longer serve requests.
+	active, _ := s.activeProvider.Load().(string)
+	if active == provider {
+		s.publishModelConfig(username, provider)
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "disconnected", "provider": provider})
 }

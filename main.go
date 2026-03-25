@@ -148,6 +148,7 @@ logger.Fatal("failed to initialize ingest service", zap.Error(err))
 apiServer := consoleapi.NewServer(consoleapi.Config{
 ListenAddr: listenAddr,
 JWTSecret:  getEnv("JWT_SECRET", "change-me-in-production"),
+NATSUrl:    natsURL,
 }, ledger, eventStore, incidentStore, logger)
 
 ctx, cancel := context.WithCancel(context.Background())

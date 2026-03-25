@@ -16,6 +16,7 @@ import (
 	"time"
 
 	jwtv5 "github.com/golang-jwt/jwt/v5"
+	nats "github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
@@ -39,6 +40,13 @@ type Config struct {
 	ReadTimeout time.Duration
 	// WriteTimeout is the HTTP server write timeout.
 	WriteTimeout time.Duration
+	// NATSUrl is the NATS server URL used to publish live model-provider config
+	// updates to the model-gateway agent whenever the active provider or its
+	// API key changes in Model Settings. Leave empty to disable publishing.
+	NATSUrl string
+	// ModelConfigTopic is the NATS subject the model-gateway subscribes to for
+	// live config updates. Defaults to "openguard.modelguard.config".
+	ModelConfigTopic string
 }
 
 // Server is the console API HTTP server.
@@ -83,6 +91,11 @@ type Server struct {
 
 	// waSession manages the WhatsApp multi-device (QR-code) live session.
 	waSession *waSession
+
+	// natsConn is the NATS connection used to publish live model-provider config
+	// updates to the model-gateway agent. Nil when NATSUrl is not configured.
+	natsConn         *nats.Conn
+	modelConfigTopic string
 }
 
 // NewServer constructs a new console API Server.
@@ -129,20 +142,24 @@ func NewServer(cfg Config, ledger *auditled.Ledger, events *EventStore, incident
 	}
 
 	s := &Server{
-		cfg:             cfg,
-		ledger:          ledger,
-		events:          events,
-		incidents:       incidents,
-		logger:          logger,
-		registry:        reg,
-		requestsTotal:   reqTotal,
-		requestDuration: reqDuration,
-		credentials:     creds,
-		commsConfig:     newCommsConfig(),
-		agentGuardStore: newAgentStore(),
-		modelGuard:      newModelGuardState(),
-		configStore:     newDomainConfigStore(),
-		waSession:       newWASession(logger),
+		cfg:              cfg,
+		ledger:           ledger,
+		events:           events,
+		incidents:        incidents,
+		logger:           logger,
+		registry:         reg,
+		requestsTotal:    reqTotal,
+		requestDuration:  reqDuration,
+		credentials:      creds,
+		commsConfig:      newCommsConfig(),
+		agentGuardStore:  newAgentStore(),
+		modelGuard:       newModelGuardState(),
+		configStore:      newDomainConfigStore(),
+		waSession:        newWASession(logger),
+		modelConfigTopic: cfg.ModelConfigTopic,
+	}
+	if s.modelConfigTopic == "" {
+		s.modelConfigTopic = "openguard.modelguard.config"
 	}
 	s.activeProvider.Store(provider)
 	return s
@@ -163,6 +180,22 @@ func (rw *responseWriter) WriteHeader(code int) {
 func (s *Server) Start(ctx context.Context) error {
 	if s.waSession != nil {
 		go s.waSession.Start(ctx)
+	}
+
+	// Connect to NATS for model-config publishing (best-effort — non-fatal).
+	if s.cfg.NATSUrl != "" {
+		nc, err := nats.Connect(s.cfg.NATSUrl,
+			nats.Name("openguard-console-api"),
+			nats.MaxReconnects(-1),
+		)
+		if err != nil {
+			s.logger.Warn("console api: NATS connect failed — model-config publishing disabled",
+				zap.String("nats_url", s.cfg.NATSUrl), zap.Error(err))
+		} else {
+			s.natsConn = nc
+			s.logger.Info("console api: NATS connected for model-config publishing",
+				zap.String("topic", s.modelConfigTopic))
+		}
 	}
 	mux := http.NewServeMux()
 
@@ -191,6 +224,10 @@ func (s *Server) Start(ctx context.Context) error {
 func (s *Server) Stop(ctx context.Context) error {
 	if s.waSession != nil {
 		s.waSession.Stop()
+	}
+	if s.natsConn != nil {
+		s.natsConn.Drain() //nolint:errcheck
+		s.natsConn = nil
 	}
 	if s.srv != nil {
 		return s.srv.Shutdown(ctx)
@@ -695,6 +732,55 @@ var knownProviders = []struct {
 	{"google-gemini", "Google (Gemini 1.5 Pro)"},
 }
 
+// modelConfigUpdate is the JSON payload published to the model-gateway config topic.
+// The model-gateway agent subscribes to this topic and hot-swaps its active provider
+// without requiring a restart.
+type modelConfigUpdate struct {
+	Provider string `json:"provider"` // canonical gateway name: "codex", "claude", "gemini"
+	APIKey   string `json:"api_key"`  // empty string means the provider was disconnected
+}
+
+// uiProviderToGateway maps console-UI provider IDs to the names the model-gateway recognises.
+var uiProviderToGateway = map[string]string{
+	"openai-codex":     "codex",
+	"anthropic-claude": "claude",
+	"google-gemini":    "gemini",
+}
+
+// publishModelConfig resolves the API key for the given user+provider pair and
+// publishes a modelConfigUpdate to the model-gateway config topic.
+// If the NATS connection is nil or the user has no credential, a warning is logged
+// and the call is a no-op — this never returns an error so callers can fire-and-forget.
+func (s *Server) publishModelConfig(username, uiProvider string) {
+	if s.natsConn == nil {
+		return
+	}
+	gatewayName, ok := uiProviderToGateway[uiProvider]
+	if !ok {
+		return // unknown provider — silently ignore
+	}
+	apiKey := ""
+	if cred, found := s.getUserCred(username, uiProvider); found {
+		apiKey = cred.AccessToken
+	}
+	update := modelConfigUpdate{Provider: gatewayName, APIKey: apiKey}
+	data, err := json.Marshal(update)
+	if err != nil {
+		s.logger.Warn("console api: failed to marshal model config update", zap.Error(err))
+		return
+	}
+	if err := s.natsConn.Publish(s.modelConfigTopic, data); err != nil {
+		s.logger.Warn("console api: failed to publish model config update",
+			zap.String("topic", s.modelConfigTopic), zap.Error(err))
+		return
+	}
+	s.logger.Info("console api: model config published to model-gateway",
+		zap.String("provider", gatewayName),
+		zap.String("topic", s.modelConfigTopic),
+		zap.Bool("has_key", apiKey != ""),
+	)
+}
+
 // handleModels handles GET /api/v1/models.
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -746,6 +832,10 @@ func (s *Server) handleModelsActive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.activeProvider.Store(req.Provider)
+	username, _ := r.Context().Value(contextKeyActor).(string)
+	// Publish the new provider (with the calling user's stored API key) to the
+	// model-gateway so it can hot-swap its active provider without restarting.
+	s.publishModelConfig(username, req.Provider)
 	writeJSON(w, http.StatusOK, map[string]string{"active": req.Provider})
 }
 
