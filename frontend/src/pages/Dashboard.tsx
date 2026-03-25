@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, type HealthResponse, type EventsResponse, type IncidentsResponse, type Event, type SystemStats, type SummaryResponse, type HostStatsResponse, type AgentStatsResponse, type ModelGuardStatsResponse, type CommsStatsResponse, type NetStatsResponse } from '../api';
+import { api, type HealthResponse, type EventsResponse, type IncidentsResponse, type Event, type SystemStats, type HostStatsResponse, type AgentStatsResponse, type ModelGuardStatsResponse, type CommsStatsResponse, type NetStatsResponse } from '../api';
 import { useInterval } from '../hooks/useInterval';
 import { useSSE } from '../hooks/useSSE';
 import MiniBarChart from '../components/MiniBarChart';
 import CPUGauge from '../components/CPUGauge';
-import AISummary from '../components/AISummary';
+import KPICharts from '../components/KPICharts';
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '';
 
@@ -29,9 +29,6 @@ export default function Dashboard() {
   const [events, setEvents] = useState<EventsResponse | null>(null);
   const [incidents, setIncidents] = useState<IncidentsResponse | null>(null);
   const [sysStats, setSysStats] = useState<SystemStats | null>(null);
-  const [aiSummary, setAiSummary] = useState<SummaryResponse | null>(null);
-  const [summaryLoading, setSummaryLoading] = useState(false);
-  const [summaryError, setSummaryError] = useState('');
   const [error, setError] = useState('');
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [liveCount, setLiveCount] = useState(0);
@@ -40,80 +37,6 @@ export default function Dashboard() {
   const [modelStats, setModelStats] = useState<ModelGuardStatsResponse | null>(null);
   const [commsStats, setCommsStats] = useState<CommsStatsResponse | null>(null);
   const [netStats, setNetStats] = useState<NetStatsResponse | null>(null);
-
-  const fetchSummary = useCallback((
-    evts: EventsResponse | null,
-    incs: IncidentsResponse | null,
-    stats: SystemStats | null,
-    hStats: HostStatsResponse | null,
-    aStats: AgentStatsResponse | null,
-    mStats: ModelGuardStatsResponse | null,
-    cStats: CommsStatsResponse | null,
-    force = false,
-  ) => {
-    // Aggregate event-type counts from the current event window
-    const typeMap: Record<string, number> = {};
-    const tierMap: Record<string, number> = {};
-    const statusMap: Record<string, number> = {};
-
-    for (const ev of evts?.events ?? []) {
-      const t = (ev as { metadata?: { event_type?: string } }).metadata?.event_type ?? ev.type ?? 'unknown';
-      typeMap[t] = (typeMap[t] ?? 0) + 1;
-      const tier = `T${ev.tier ?? 0}`;
-      tierMap[tier] = (tierMap[tier] ?? 0) + 1;
-    }
-    for (const inc of incs?.incidents ?? []) {
-      const s = inc.status ?? 'unknown';
-      statusMap[s] = (statusMap[s] ?? 0) + 1;
-    }
-
-    if (!force && aiSummary) return;   // skip if we already have one (cache is server-side)
-
-    setSummaryLoading(true);
-    setSummaryError('');
-    api.summary({
-      total_events: evts?.total ?? 0,
-      total_incidents: incs?.total ?? 0,
-      cpu_util_pct: stats?.cpu_util_pct ?? -1,
-      mem_used_pct: stats?.mem_used_pct ?? 0,
-      load_avg_1m: stats?.load_avg_1m ?? 0,
-      top_event_types: Object.entries(typeMap)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 5)
-        .map(([type, count]) => ({ type, count })),
-      tier_breakdown: Object.entries(tierMap).map(([tier, count]) => ({ tier, count })),
-      incident_statuses: Object.entries(statusMap).map(([status, count]) => ({ status, count })),
-      // HostGuard
-      host_total_events:  hStats?.total_events  ?? 0,
-      host_threat_events: hStats?.threat_events ?? 0,
-      host_unique_hosts:  hStats?.unique_hosts  ?? 0,
-      host_active_rules:  hStats?.active_rules  ?? 0,
-      // AgentGuard
-      agent_total_agents:    aStats?.total_agents     ?? 0,
-      agent_active_agents:   aStats?.active_agents    ?? 0,
-      agent_suspended_count: aStats?.suspended_count  ?? 0,
-      agent_quarantine_count: aStats?.quarantine_count ?? 0,
-      agent_total_threats:   aStats?.total_threats    ?? 0,
-      // ModelGuard
-      model_total_calls:    mStats?.total_calls    ?? 0,
-      model_blocked_calls:  mStats?.blocked_calls  ?? 0,
-      model_avg_latency_ms: mStats?.avg_latency_ms ?? 0,
-      model_avg_confidence: mStats?.avg_confidence ?? 0,
-      model_risk_breakdown: mStats?.risk_breakdown ?? [],
-      // CommsGuard
-      comms_total_events:    cStats?.total_events ?? 0,
-      comms_total_threats:   cStats?.total_threats ?? 0,
-      comms_top_event_types: cStats?.event_types?.slice(0, 5) ?? [],
-      // Threat / anomaly breakdowns
-      host_top_event_types:  hStats?.event_types?.slice(0, 5) ?? [],
-      agent_top_event_types: aStats?.event_types?.slice(0, 5) ?? [],
-    })
-      .then((r) => setAiSummary(r))
-      .catch((err: unknown) => setSummaryError(
-        err instanceof Error ? err.message : 'Could not reach AI provider — set an API key in Model Settings.',
-      ))
-      .finally(() => setSummaryLoading(false));
-  }, [aiSummary]);
 
   const fetchAll = useCallback(() => {
     // Guard module stats — fire-and-forget so they don't block the main load
@@ -130,9 +53,6 @@ export default function Dashboard() {
         setIncidents(i);
         setSysStats(s);
         setLastUpdated(new Date());
-        // Fetch summary once after first data load (skip on subsequent polls
-        // unless the user explicitly triggers regeneration).
-        fetchSummary(e, i, s, hostStats, agentStats, modelStats, commsStats, false);
       })
       .catch((err: unknown) =>
         setError(err instanceof Error ? err.message : String(err)),
@@ -143,11 +63,6 @@ export default function Dashboard() {
   useEffect(() => { fetchAll(); }, [fetchAll]);
   // Keep a REST polling fallback at 5 s in case the SSE connection drops.
   useInterval(fetchAll, 5000);
-  // Auto-regenerate the AI summary every 5 minutes.
-  useInterval(
-    () => fetchSummary(events, incidents, sysStats, hostStats, agentStats, modelStats, commsStats, true),
-    5 * 60 * 1000,
-  );
 
   // Build the SSE URL, passing the JWT as a query param (EventSource can't
   // send custom headers, so the backend accepts ?token= as a fallback).
@@ -359,12 +274,15 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* ── AI Summary ───────────────────────────────────────────────── */}
-      <AISummary
-        data={aiSummary}
-        loading={summaryLoading}
-        error={summaryError}
-        onRefresh={() => fetchSummary(events, incidents, sysStats, hostStats, agentStats, modelStats, commsStats, true)}
+      {/* ── KPI Charts ───────────────────────────────────────────────── */}
+      <KPICharts
+        events={events}
+        incidents={incidents}
+        hostStats={hostStats}
+        agentStats={agentStats}
+        modelStats={modelStats}
+        commsStats={commsStats}
+        netStats={netStats}
       />
 
       {/* ── CPU & Memory utilisation row ─────────────────────────────── */}
