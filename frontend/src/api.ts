@@ -459,6 +459,34 @@ export interface WAMessagesResponse {
   total: number;
 }
 
+// ─── Telegram Bot Session types ───────────────────────────────────────────────
+
+export interface TGStatus {
+  state: 'disconnected' | 'connecting' | 'polling';
+  bot_username?: string;
+  bot_id?: number;
+  connected_since?: string; // RFC3339
+  message_count: number;
+}
+
+export interface TGMessage {
+  id: string;
+  chat_id: number;
+  chat_title?: string;
+  sender: string;
+  username?: string;
+  content: string;
+  timestamp: string;
+  is_group: boolean;
+  is_flagged: boolean;
+  threats: string[];
+}
+
+export interface TGMessagesResponse {
+  messages: TGMessage[];
+  total: number;
+}
+
 // ─── HostGuard types ─────────────────────────────────────────────────────────
 
 export interface HostEventTypeStat {
@@ -699,6 +727,11 @@ export const api = {
   waMessages: () => get<WAMessagesResponse>('/api/v1/commsguard/whatsapp/messages'),
   waConnect: () => post<{ status: string }>('/api/v1/commsguard/whatsapp/connect'),
   waLogout: () => post<{ status: string }>('/api/v1/commsguard/whatsapp/logout'),
+  // Telegram bot session
+  tgStatus: () => get<TGStatus>('/api/v1/commsguard/telegram/status'),
+  tgMessages: () => get<TGMessagesResponse>('/api/v1/commsguard/telegram/messages'),
+  tgConnect: () => post<{ status: string }>('/api/v1/commsguard/telegram/connect'),
+  tgDisconnect: () => post<{ status: string }>('/api/v1/commsguard/telegram/disconnect'),
 
   // ModelGuard endpoints
   modelGuardStats: () => get<ModelGuardStatsResponse>('/api/v1/modelguard/stats'),

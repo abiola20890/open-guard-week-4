@@ -14,6 +14,8 @@ import {
   type WAStatus,
   type WAQRData,
   type WAMessage,
+  type TGStatus,
+  type TGMessage,
 } from '../api';
 import { useInterval } from '../hooks/useInterval';
 import { useToast } from '../contexts/ToastContext';
@@ -289,165 +291,6 @@ function TunnelSetupCard() {
   );
 }
 
-// ─── Sub-components ───────────────────────────────────────────────────────────
-
-function StatCard({ label, value, color }: { label: string; value: number | string; color?: string }) {
-  return (
-    <div className="card stat-card">
-      <div className="stat-value" style={color ? { color } : undefined}>
-        {value}
-      </div>
-      <div className="stat-label">{label}</div>
-    </div>
-  );
-}
-
-function ThreatBar({ label, count, max, color }: { label: string; count: number; max: number; color: string }) {
-  const pct = max > 0 ? Math.round((count / max) * 100) : 0;
-  return (
-    <div style={{ marginBottom: '0.625rem' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8125rem', marginBottom: '0.25rem' }}>
-        <span style={{ color: '#cbd5e1', textTransform: 'capitalize' }}>
-          {label.replace(/_/g, ' ')}
-        </span>
-        <span style={{ color: '#94a3b8' }}>{count}</span>
-      </div>
-      <div style={{ background: '#0f172a', borderRadius: '4px', height: '8px', overflow: 'hidden' }}>
-        <div
-          style={{
-            height: '100%',
-            borderRadius: '4px',
-            width: `${pct}%`,
-            background: color,
-            transition: 'width 0.5s ease',
-          }}
-        />
-      </div>
-    </div>
-  );
-}
-
-function ChannelCard({
-  channel,
-  onConfigure,
-}: {
-  channel: CommsChannel;
-  onConfigure: (ch: CommsChannel) => void;
-}) {
-  const hasActivity = (channel.message_count ?? 0) > 0;
-  const hasThreat = (channel.threat_count ?? 0) > 0;
-
-  return (
-    <div
-      className="card"
-      style={{
-        borderLeft: `3px solid ${
-          hasThreat ? '#dc2626' : channel.configured ? '#16a34a' : '#334155'
-        }`,
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}>
-          <span style={{ fontSize: '1.25rem' }}>{channel.icon}</span>
-          <span style={{ color: '#f1f5f9', fontWeight: 600, fontSize: '0.9375rem' }}>{channel.name}</span>
-        </div>
-        <span
-          style={{
-            fontSize: '0.6875rem',
-            fontWeight: 700,
-            padding: '0.15rem 0.5rem',
-            borderRadius: '9999px',
-            background: channel.configured ? '#14532d' : '#1e293b',
-            color: channel.configured ? '#86efac' : '#64748b',
-            border: `1px solid ${channel.configured ? '#166534' : '#334155'}`,
-          }}
-        >
-          {channel.configured ? 'CONFIGURED' : 'NOT CONFIGURED'}
-        </span>
-      </div>
-
-      <p style={{ fontSize: '0.8125rem', color: '#64748b', margin: '0 0 0.75rem' }}>
-        {channel.description}
-      </p>
-
-      <div style={{ display: 'flex', gap: '1.5rem', marginBottom: '0.875rem' }}>
-        <div>
-          <div style={{ fontSize: '1.125rem', fontWeight: 700, color: '#f1f5f9' }}>
-            {channel.message_count ?? 0}
-          </div>
-          <div style={{ fontSize: '0.6875rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            Messages
-          </div>
-        </div>
-        <div>
-          <div
-            style={{
-              fontSize: '1.125rem',
-              fontWeight: 700,
-              color: hasThreat ? '#f87171' : '#94a3b8',
-            }}
-          >
-            {channel.threat_count ?? 0}
-          </div>
-          <div style={{ fontSize: '0.6875rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            Threats
-          </div>
-        </div>
-        {channel.last_event && (
-          <div>
-            <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
-              {new Date(channel.last_event).toLocaleTimeString()}
-            </div>
-            <div style={{ fontSize: '0.6875rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Last Event
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-        <code style={{ fontSize: '0.75rem', color: '#475569', flex: 1 }}>
-          {channel.webhook_path}
-        </code>
-        <button
-          onClick={() => onConfigure(channel)}
-          style={{
-            background: '#1e3a5f',
-            color: '#93c5fd',
-            border: '1px solid #1e40af',
-            borderRadius: '6px',
-            padding: '0.3rem 0.75rem',
-            cursor: 'pointer',
-            fontSize: '0.75rem',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          ⚙️ Configure
-        </button>
-      </div>
-
-      {hasActivity && hasThreat && (
-        <div
-          style={{
-            marginTop: '0.625rem',
-            padding: '0.375rem 0.625rem',
-            background: '#450a0a',
-            border: '1px solid #7f1d1d',
-            borderRadius: '6px',
-            fontSize: '0.75rem',
-            color: '#fca5a5',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.375rem',
-          }}
-        >
-          ⚠️ Threat activity detected on this channel — review events below.
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ─── Configuration Modal ──────────────────────────────────────────────────────
 
 interface ConfigModalProps {
@@ -655,217 +498,6 @@ function ConfigModal({ channel, configItem, onClose, onSaved }: ConfigModalProps
           </button>
         </div>
       </div>
-    </div>
-  );
-}
-
-// ─── WhatsApp Live Session Panel ──────────────────────────────────────────────
-
-function WhatsAppSessionPanel() {
-  const [status, setStatus] = useState<WAStatus | null>(null);
-  const [qrData, setQrData] = useState<WAQRData | null>(null);
-  const [messages, setMessages] = useState<WAMessage[]>([]);
-
-  const fetchStatus = useCallback(() => {
-    api.waStatus().then(setStatus).catch(() => {});
-  }, []);
-
-  const fetchQR = useCallback(() => {
-    api.waQR().then(setQrData).catch(() => {});
-  }, []);
-
-  const fetchMessages = useCallback(() => {
-    api.waMessages().then((r) => setMessages(r.messages)).catch(() => {});
-  }, []);
-
-  useEffect(() => { fetchStatus(); }, [fetchStatus]);
-  useInterval(fetchStatus, 5000);
-
-  useEffect(() => {
-    if (status?.state === 'qr_ready') fetchQR();
-  }, [status?.state, fetchQR]);
-  useInterval(() => { if (status?.state === 'qr_ready') fetchQR(); }, 20000);
-
-  useEffect(() => {
-    if (status?.state === 'connected') fetchMessages();
-  }, [status?.state, fetchMessages]);
-  useInterval(() => { if (status?.state === 'connected') fetchMessages(); }, 3000);
-
-  const handleConnect = () => api.waConnect().then(fetchStatus).catch(() => {});
-  const handleLogout = () =>
-    api.waLogout().then(() => { setMessages([]); fetchStatus(); }).catch(() => {});
-
-  const stateColor =
-    ({ disconnected: '#475569', connecting: '#f59e0b', qr_ready: '#3b82f6', connected: '#22c55e' } as Record<string, string>)[
-      status?.state ?? 'disconnected'
-    ] ?? '#475569';
-
-  return (
-    <div className="card" style={{ marginBottom: '1.25rem', borderLeft: `3px solid ${stateColor}` }}>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}>
-          <span style={{ fontSize: '1.25rem' }}>📱</span>
-          <div>
-            <div style={{ fontWeight: 700, color: '#f1f5f9', fontSize: '0.9375rem' }}>WhatsApp Live Session</div>
-            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>QR-code companion device · multi-device protocol</div>
-          </div>
-        </div>
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-          <span style={{
-            fontSize: '0.7rem', fontWeight: 700, padding: '0.15rem 0.5rem',
-            borderRadius: '9999px', background: '#1e293b', color: stateColor, border: `1px solid ${stateColor}`,
-          }}>
-            {(status?.state ?? 'disconnected').toUpperCase().replace('_', ' ')}
-          </span>
-          {status?.state !== 'connected' && status?.state !== 'qr_ready' && (
-            <button
-              className="btn-secondary"
-              onClick={handleConnect}
-              style={{ fontSize: '0.75rem', padding: '0.25rem 0.75rem' }}
-            >
-              Connect
-            </button>
-          )}
-          {(status?.state === 'connected' || status?.state === 'qr_ready') && (
-            <button
-              className="btn-secondary"
-              onClick={handleLogout}
-              style={{ fontSize: '0.75rem', padding: '0.25rem 0.75rem', color: '#f87171' }}
-            >
-              Logout
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* QR code */}
-      {status?.state === 'qr_ready' && qrData?.qr_image && (
-        <div style={{
-          display: 'flex', flexDirection: 'column', alignItems: 'center',
-          padding: '1.5rem', background: '#fff', borderRadius: '12px',
-          marginBottom: '1rem', maxWidth: '320px', margin: '0 auto 1rem',
-        }}>
-          <img src={qrData.qr_image} alt="WhatsApp QR Code" style={{ width: 300, height: 300, display: 'block' }} />
-          <div style={{ marginTop: '0.75rem', fontSize: '0.8125rem', color: '#1e293b', textAlign: 'center', fontWeight: 500 }}>
-            Open WhatsApp → Linked Devices → Link a Device
-            <br />
-            <span style={{ fontSize: '0.7rem', color: '#64748b' }}>
-              {qrData.expires_at ? `Expires ${new Date(qrData.expires_at).toLocaleTimeString()}` : 'Scan now'}
-            </span>
-          </div>
-        </div>
-      )}
-
-      {/* Connected info */}
-      {status?.state === 'connected' && (
-        <div style={{
-          display: 'flex', gap: '1.5rem', padding: '0.75rem',
-          background: '#052e16', borderRadius: '8px', marginBottom: '1rem',
-          border: '1px solid #166534', flexWrap: 'wrap',
-        }}>
-          <div>
-            <div style={{ fontSize: '0.7rem', color: '#4ade80' }}>Phone</div>
-            <div style={{ fontSize: '0.875rem', color: '#f1f5f9', fontWeight: 600 }}>+{status.phone}</div>
-          </div>
-          {(status.message_count ?? 0) > 0 && (
-            <div>
-              <div style={{ fontSize: '0.7rem', color: '#4ade80' }}>Messages</div>
-              <div style={{ fontSize: '0.875rem', color: '#f1f5f9', fontWeight: 600 }}>{status.message_count}</div>
-            </div>
-          )}
-          {status.connected_since && (
-            <div>
-              <div style={{ fontSize: '0.7rem', color: '#4ade80' }}>Since</div>
-              <div style={{ fontSize: '0.875rem', color: '#f1f5f9' }}>{new Date(status.connected_since).toLocaleTimeString()}</div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Intercepted messages */}
-      {status?.state === 'connected' && messages.length > 0 && (
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-            <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#94a3b8' }}>
-              Live Feed
-            </div>
-            {messages.some(m => m.is_flagged) && (
-              <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#f87171', background: '#450a0a', border: '1px solid #7f1d1d', borderRadius: '9999px', padding: '0.1rem 0.5rem' }}>
-                ⚠️ {messages.filter(m => m.is_flagged).length} blocked
-              </span>
-            )}
-          </div>
-          <div style={{ maxHeight: '380px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
-            {messages.slice(0, 50).map((msg) => {
-              const borderColor = msg.is_flagged ? '#dc2626' : msg.from_me ? '#3b82f6' : '#475569';
-              const bgColor     = msg.is_flagged ? '#1f0a0a' : msg.from_me ? '#1e3a5f' : '#0f172a';
-              const borderSide  = msg.is_flagged ? '#dc2626' : msg.from_me ? '#1d4ed8' : '#1e293b';
-              return (
-                <div
-                  key={msg.id}
-                  style={{
-                    padding: '0.5rem 0.75rem',
-                    background: bgColor,
-                    borderRadius: '6px',
-                    border: `1px solid ${borderSide}`,
-                    borderLeft: `3px solid ${borderColor}`,
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
-                      <span style={{ fontSize: '0.7rem', color: msg.is_flagged ? '#fca5a5' : '#94a3b8', fontWeight: 600 }}>
-                        {msg.from_me ? '📤 You' : `📩 +${msg.sender}`}
-                        {msg.is_group && <span style={{ marginLeft: '0.3rem', color: '#64748b' }}>· group</span>}
-                      </span>
-                      {msg.is_flagged && (
-                        <span style={{
-                          fontSize: '0.6rem', fontWeight: 800, padding: '0.05rem 0.4rem',
-                          borderRadius: '9999px', background: '#7f1d1d', color: '#fca5a5',
-                          border: '1px solid #dc2626', letterSpacing: '0.05em',
-                        }}>
-                          🚫 BLOCKED
-                        </span>
-                      )}
-                    </div>
-                    <span style={{ fontSize: '0.65rem', color: '#475569' }}>
-                      {new Date(msg.timestamp).toLocaleTimeString()}
-                    </span>
-                  </div>
-
-                  <div style={{ fontSize: '0.8125rem', color: msg.is_flagged ? '#fca5a5' : '#e2e8f0', marginBottom: msg.is_flagged && msg.threats.length > 0 ? '0.375rem' : 0 }}>
-                    {msg.has_media && !msg.content && '📎 [media]'}
-                    {msg.content || (msg.has_media ? '' : '[no content]')}
-                  </div>
-
-                  {msg.is_flagged && msg.threats.length > 0 && (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
-                      {msg.threats.map((t) => (
-                        <span
-                          key={t}
-                          style={{
-                            fontSize: '0.6rem', fontWeight: 700, padding: '0.1rem 0.4rem',
-                            borderRadius: '4px', background: '#450a0a', color: '#f87171',
-                            border: '1px solid #7f1d1d', textTransform: 'uppercase', letterSpacing: '0.04em',
-                          }}
-                        >
-                          {t.replace(/_/g, ' ')}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {status?.state === 'connected' && messages.length === 0 && (
-        <div className="empty-state">
-          Waiting for messages… Send or receive a WhatsApp message to see it here.
-        </div>
-      )}
     </div>
   );
 }
@@ -1257,6 +889,129 @@ function WALinkedStats({
   );
 }
 
+// ─── TGLinkedStats ─────────────────────────────────────────────────────────────
+
+const TG_BLUE = '#2ca5e0';
+
+function TGLinkedStats({
+  status,
+  messages,
+  onConnect,
+  onDisconnect,
+}: {
+  status: TGStatus | null;
+  messages: TGMessage[];
+  onConnect: () => void;
+  onDisconnect: () => void;
+}) {
+  const stateColor =
+    status?.state === 'polling'    ? '#22c55e' :
+    status?.state === 'connecting' ? '#f59e0b' : '#475569';
+  const stateLabel = (status?.state ?? 'disconnected').toUpperCase().replace('_', ' ');
+
+  const groupMsgs   = messages.filter((m) => m.is_group).length;
+  const directMsgs  = messages.filter((m) => !m.is_group).length;
+  const flagged     = messages.filter((m) => m.is_flagged).length;
+
+  const [uptimeTick, setUptimeTick] = useState(0);
+  useEffect(() => {
+    if (status?.state !== 'polling') return;
+    const id = setInterval(() => setUptimeTick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [status?.state]);
+
+  const connectedDuration = useMemo(() => {
+    void uptimeTick;
+    if (!status?.connected_since) return null;
+    const secs = Math.floor((Date.now() - new Date(status.connected_since).getTime()) / 1000);
+    if (secs < 60)   return `${secs}s`;
+    if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+    return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
+  }, [status?.connected_since, uptimeTick]);
+
+  const statCell = (label: string, value: number, color: string) => (
+    <div style={{ background: '#0f172a', borderRadius: '6px', padding: '0.5rem 0.625rem', textAlign: 'center', border: '1px solid #1e293b' }}>
+      <div style={{ fontSize: '1.125rem', fontWeight: 700, color }}>{value}</div>
+      <div style={{ fontSize: '0.6rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em' }}>{label}</div>
+    </div>
+  );
+
+  return (
+    <div className="card" style={{ borderLeft: `3px solid ${stateColor}` }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.875rem' }}>
+        <div>
+          <div style={{ fontWeight: 700, color: '#f1f5f9', fontSize: '0.9rem' }}>✈️ Telegram Bot Session</div>
+          <div style={{ fontSize: '0.7rem', color: '#64748b' }}>Bot API · long-poll interception</div>
+        </div>
+        <div style={{ display: 'flex', gap: '0.375rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: '0.6rem', fontWeight: 700, padding: '0.15rem 0.5rem', borderRadius: '9999px', background: '#1e293b', color: stateColor, border: `1px solid ${stateColor}40` }}>
+            {stateLabel}
+          </span>
+          {status?.state !== 'polling' && (
+            <button className="btn-secondary" onClick={onConnect} style={{ fontSize: '0.7rem', padding: '0.2rem 0.6rem' }}>Connect</button>
+          )}
+          {status?.state === 'polling' && (
+            <button className="btn-secondary" onClick={onDisconnect} style={{ fontSize: '0.7rem', padding: '0.2rem 0.6rem', color: '#f87171' }}>Disconnect</button>
+          )}
+        </div>
+      </div>
+
+      {status?.state === 'polling' && (
+        <>
+          <div style={{ display: 'flex', gap: '0.75rem', padding: '0.625rem 0.875rem', background: '#0c1f2e', borderRadius: '6px', marginBottom: '0.875rem', border: `1px solid ${TG_BLUE}40`, flexWrap: 'wrap' }}>
+            {status.bot_username && (
+              <div>
+                <div style={{ fontSize: '0.6rem', color: TG_BLUE, textTransform: 'uppercase' }}>Bot</div>
+                <div style={{ fontSize: '0.875rem', color: '#f1f5f9', fontWeight: 700 }}>@{status.bot_username}</div>
+              </div>
+            )}
+            {status.bot_id && (
+              <div>
+                <div style={{ fontSize: '0.6rem', color: TG_BLUE, textTransform: 'uppercase' }}>ID</div>
+                <div style={{ fontSize: '0.875rem', color: '#f1f5f9' }}>{status.bot_id}</div>
+              </div>
+            )}
+            {connectedDuration && (
+              <div>
+                <div style={{ fontSize: '0.6rem', color: TG_BLUE, textTransform: 'uppercase' }}>Uptime</div>
+                <div style={{ fontSize: '0.875rem', color: '#f1f5f9' }}>{connectedDuration}</div>
+              </div>
+            )}
+            <div>
+              <div style={{ fontSize: '0.6rem', color: TG_BLUE, textTransform: 'uppercase' }}>Session</div>
+              <div style={{ fontSize: '0.875rem', color: '#22c55e', fontWeight: 700 }}>● Polling</div>
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem', marginBottom: '0.75rem' }}>
+            {statCell('Total',   status.message_count ?? 0, '#60a5fa')}
+            {statCell('Groups',  groupMsgs,                 '#a78bfa')}
+            {statCell('Direct',  directMsgs,                '#94a3b8')}
+            {statCell('Flagged', flagged,                   flagged > 0 ? '#f87171' : '#64748b')}
+            {statCell('Clean',   Math.max(0, messages.length - flagged), '#4ade80')}
+            {statCell('Buffer',  messages.length,           TG_BLUE)}
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 0.75rem', background: '#0f172a', borderRadius: '6px', border: '1px solid #1e293b' }}>
+            <div style={{ width: 8, height: 8, borderRadius: '50%', background: TG_BLUE, boxShadow: `0 0 6px ${TG_BLUE}` }} />
+            <span style={{ fontSize: '0.75rem', color: TG_BLUE, fontWeight: 600 }}>Long-poll active</span>
+            <span style={{ marginLeft: 'auto', fontSize: '0.65rem', color: '#475569' }}>Telegram Bot API</span>
+          </div>
+        </>
+      )}
+
+      {(status?.state === 'disconnected' || !status) && (
+        <div style={{ textAlign: 'center', padding: '1.5rem', color: '#64748b', fontSize: '0.875rem' }}>
+          Not connected — set <code style={{ color: '#94a3b8', fontSize: '0.8rem' }}>OPENGUARD_TELEGRAM_BOT_TOKEN</code> and click <strong style={{ color: '#94a3b8' }}>Connect</strong>.
+        </div>
+      )}
+      {status?.state === 'connecting' && (
+        <div style={{ textAlign: 'center', padding: '1.25rem', color: '#f59e0b', fontSize: '0.875rem' }}>Connecting…</div>
+      )}
+    </div>
+  );
+}
+
 // ─── InterceptFeed ────────────────────────────────────────────────────────────
 
 interface FeedItem {
@@ -1515,16 +1270,21 @@ function InterceptionTab({ channels, stats }: { channels: CommsChannel[]; stats:
   const [waStatus, setWaStatus]       = useState<WAStatus | null>(null);
   const [waQrData, setWaQrData]       = useState<WAQRData | null>(null);
   const [waMessages, setWaMessages]   = useState<WAMessage[]>([]);
+  const [tgStatus, setTgStatus]       = useState<TGStatus | null>(null);
+  const [tgMessages, setTgMessages]   = useState<TGMessage[]>([]);
   const [commsEventsData, setCommsEventsData] = useState<CommsEventsResponse | null>(null);
   const [interceptChannelFilter, setInterceptChannelFilter] = useState('');
 
   const fetchWaStatus    = useCallback(() => { api.waStatus().then(setWaStatus).catch(() => {}); }, []);
   const fetchWaQR        = useCallback(() => { api.waQR().then(setWaQrData).catch(() => {}); }, []);
   const fetchWaMessages  = useCallback(() => { api.waMessages().then((r) => setWaMessages(r.messages)).catch(() => {}); }, []);
+  const fetchTgStatus    = useCallback(() => { api.tgStatus().then(setTgStatus).catch(() => {}); }, []);
+  const fetchTgMessages  = useCallback(() => { api.tgMessages().then((r) => setTgMessages(r.messages)).catch(() => {}); }, []);
   const fetchCommsEvents = useCallback(() => { api.commsEvents(undefined, 1).then(setCommsEventsData).catch(() => {}); }, []);
 
-  useEffect(() => { fetchWaStatus(); fetchCommsEvents(); }, [fetchWaStatus, fetchCommsEvents]);
+  useEffect(() => { fetchWaStatus(); fetchTgStatus(); fetchCommsEvents(); }, [fetchWaStatus, fetchTgStatus, fetchCommsEvents]);
   useInterval(fetchWaStatus, 5000);
+  useInterval(fetchTgStatus, 5000);
 
   useEffect(() => {
     if (waStatus?.state === 'qr_ready') fetchWaQR();
@@ -1535,14 +1295,23 @@ function InterceptionTab({ channels, stats }: { channels: CommsChannel[]; stats:
     if (waStatus?.state === 'connected') fetchWaMessages();
   }, [waStatus?.state, fetchWaMessages]);
   useInterval(() => { if (waStatus?.state === 'connected') fetchWaMessages(); }, 3000);
+
+  useEffect(() => {
+    if (tgStatus?.state === 'polling') fetchTgMessages();
+  }, [tgStatus?.state, fetchTgMessages]);
+  useInterval(() => { if (tgStatus?.state === 'polling') fetchTgMessages(); }, 5000);
+
   useInterval(fetchCommsEvents, 10000);
 
-  const handleConnect = () => { void api.waConnect().then(fetchWaStatus); };
-  const handleLogout  = () => { void api.waLogout().then(() => { setWaMessages([]); fetchWaStatus(); }); };
+  const handleConnect    = () => { void api.waConnect().then(fetchWaStatus); };
+  const handleLogout     = () => { void api.waLogout().then(() => { setWaMessages([]); fetchWaStatus(); }); };
+  const handleTgConnect  = () => { void api.tgConnect().then(fetchTgStatus); };
+  const handleTgDisconnect = () => { void api.tgDisconnect().then(() => { setTgMessages([]); fetchTgStatus(); }); };
 
   const commsEventsList = commsEventsData?.events ?? [];
   const threatChannels  = channels.filter((ch) => (ch.threat_count ?? 0) > 0);
   const waChannel       = channels.find((c) => c.id === 'whatsapp');
+  const tgChannel       = channels.find((c) => c.id === 'telegram');
 
   return (
     <div>
@@ -1568,7 +1337,7 @@ function InterceptionTab({ channels, stats }: { channels: CommsChannel[]; stats:
           />
         </div>
 
-        {/* Right: WA stats + summary */}
+        {/* Right: linked-device panels + summary */}
         <div style={{ width: '340px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <WALinkedStats
             status={waStatus}
@@ -1576,6 +1345,13 @@ function InterceptionTab({ channels, stats }: { channels: CommsChannel[]; stats:
             qrData={waQrData}
             onConnect={handleConnect}
             onLogout={handleLogout}
+          />
+
+          <TGLinkedStats
+            status={tgStatus}
+            messages={tgMessages}
+            onConnect={handleTgConnect}
+            onDisconnect={handleTgDisconnect}
           />
 
           {/* Per-adapter threat breakdown */}
@@ -1611,11 +1387,13 @@ function InterceptionTab({ channels, stats }: { channels: CommsChannel[]; stats:
             <table style={{ width: '100%' }}>
               <tbody>
                 {[
-                  { label: 'Total Events',    value: stats?.total_events ?? 0,         color: '#60a5fa' },
-                  { label: 'Threats Detected', value: stats?.total_threats ?? 0,        color: (stats?.total_threats ?? 0) > 0 ? '#f87171' : '#64748b' },
-                  { label: 'Active Channels', value: channels.filter((c) => c.configured).length, color: '#4ade80' },
-                  { label: 'WA Messages',     value: waMessages.length,                color: '#25d366' },
-                  { label: 'WA Threat Events', value: waChannel?.threat_count ?? 0,    color: '#f87171' },
+                  { label: 'Total Events',     value: stats?.total_events ?? 0,                            color: '#60a5fa' },
+                  { label: 'Threats Detected',  value: stats?.total_threats ?? 0,                           color: (stats?.total_threats ?? 0) > 0 ? '#f87171' : '#64748b' },
+                  { label: 'Active Channels',   value: channels.filter((c) => c.configured).length,         color: '#4ade80' },
+                  { label: 'WA Messages',       value: waMessages.length,                                   color: '#25d366' },
+                  { label: 'WA Threat Events',  value: waChannel?.threat_count ?? 0,                        color: '#f87171' },
+                  { label: 'TG Messages',       value: tgMessages.length,                                   color: '#2ca5e0' },
+                  { label: 'TG Threat Events',  value: tgChannel?.threat_count ?? 0,                        color: '#f87171' },
                 ].map((row) => (
                   <tr key={row.label}>
                     <td style={{ color: '#64748b', fontSize: '0.8125rem', padding: '0.3rem 0' }}>{row.label}</td>
@@ -1634,8 +1412,8 @@ function InterceptionTab({ channels, stats }: { channels: CommsChannel[]; stats:
 export default function CommsGuard() {
   const [stats, setStats] = useState<CommsStatsResponse | null>(null);
   const [config, setConfig] = useState<CommsConfigResponse | null>(null);
-  const [configLoading, setConfigLoading] = useState(true);
-  const [statsLoading, setStatsLoading] = useState(true);
+  const [, setConfigLoading] = useState(true);
+  const [, setStatsLoading] = useState(true);
   const [error, setError] = useState('');
 
   // Channel filter is lifted to share between channel cards and events table.
@@ -1645,7 +1423,7 @@ export default function CommsGuard() {
   const [modalChannel, setModalChannel] = useState<CommsChannel | null>(null);
 
   // Tab state.
-  const [tab, setTab] = useState<'overview' | 'interception' | 'events' | 'config'>('overview');
+  const [tab, setTab] = useState<'interception' | 'events' | 'config'>('interception');
 
   // Domain config state (Configuration tab).
   const [domainConfig, setDomainConfig] = useState<CommsGuardConfigResponse | null>(null);
@@ -1740,15 +1518,8 @@ export default function CommsGuard() {
   // (no extra fetch needed — uses shared stats/channels state)
 
   const channels = stats?.channels ?? [];
-  const eventTypes = stats?.event_types ?? [];
-  const maxEventTypeCount = eventTypes.reduce((m, e) => Math.max(m, e.count), 1);
-
   function getConfigItem(id: string): CommsChannelConfigItem | undefined {
     return config?.channels.find((c) => c.id === id);
-  }
-
-  function handleOpenModal(ch: CommsChannel) {
-    setModalChannel(ch);
   }
 
   function handleModalClose() {
@@ -1759,9 +1530,6 @@ export default function CommsGuard() {
     fetchConfig();
     fetchStats();
   }
-
-  // Threat channel list for the threat overview panel.
-  const threatChannels = channels.filter((ch) => (ch.threat_count ?? 0) > 0);
 
   return (
     <div>
@@ -1782,7 +1550,7 @@ export default function CommsGuard() {
 
       {/* ─── Tabs ─────────────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '1.5rem', borderBottom: '1px solid #334155' }}>
-        {(['overview', 'interception', 'events', 'config'] as const).map(t => (
+        {(['interception', 'events', 'config'] as const).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -1799,170 +1567,10 @@ export default function CommsGuard() {
               marginBottom: '-1px',
             }}
           >
-            {t === 'overview' ? 'Overview' : t === 'interception' ? '🔭 Interception' : t === 'events' ? 'Events' : '⚙️ Configuration'}
+            {t === 'interception' ? '🔭 Interception' : t === 'events' ? 'Events' : '⚙️ Configuration'}
           </button>
         ))}
       </div>
-
-      {/* ─── Overview tab ─────────────────────────────────────────────────── */}
-      {tab === 'overview' && (
-        <div>
-          {/* Statistics Row */}
-          {statsLoading ? (
-            <div className="loading">Loading statistics…</div>
-          ) : (
-            <div className="card-grid">
-              <StatCard label="Total Comms Events" value={stats?.total_events ?? 0} />
-              <StatCard
-                label="Threats Detected"
-                value={stats?.total_threats ?? 0}
-                color={(stats?.total_threats ?? 0) > 0 ? '#f87171' : undefined}
-              />
-              <StatCard
-                label="Channels Monitored"
-                value={channels.filter((c) => c.configured).length}
-              />
-              <StatCard
-                label="Active Threat Channels"
-                value={threatChannels.length}
-                color={threatChannels.length > 0 ? '#fbbf24' : undefined}
-              />
-            </div>
-          )}
-
-          {/* Adapter status mini-grid */}
-          {!statsLoading && channels.length > 0 && (
-            <div style={{ marginBottom: '1.25rem' }}>
-              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.5rem' }}>
-                Adapter Status
-              </div>
-              <AdapterStatusGrid channels={channels} />
-            </div>
-          )}
-
-          {/* Channel Cards Grid */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
-              gap: '1rem',
-              marginBottom: '1.5rem',
-            }}
-          >
-            {(statsLoading ? [] : channels).map((ch) => (
-              <ChannelCard
-                key={ch.id}
-                channel={ch}
-                onConfigure={handleOpenModal}
-              />
-            ))}
-          </div>
-
-          {/* WhatsApp Live Session (QR-based) */}
-          <div style={{ marginBottom: '1.5rem' }}>
-            <WhatsAppSessionPanel />
-          </div>
-
-          {/* Threat Distribution + Global Config */}
-          <div className="card-grid">
-            <div className="card">
-              <div className="section-title">Threat Event Type Breakdown</div>
-              {eventTypes.length === 0 ? (
-                <div style={{ color: '#475569', fontSize: '0.875rem' }}>
-                  No comms events recorded yet.
-                </div>
-              ) : (
-                eventTypes.map((et) => (
-                  <ThreatBar
-                    key={et.type}
-                    label={et.type}
-                    count={et.count}
-                    max={maxEventTypeCount}
-                    color={EVENT_TYPE_COLORS[et.type] ?? '#64748b'}
-                  />
-                ))
-              )}
-            </div>
-
-            {!configLoading && config && (
-              <div className="card">
-                <div className="section-title">Global Settings</div>
-                <table>
-                  <tbody>
-                    <tr>
-                      <td style={{ color: '#64748b', fontSize: '0.8125rem' }}>Content Analysis</td>
-                      <td>
-                        <span style={{ fontSize: '0.75rem', fontWeight: 700, color: config.enable_content_analysis ? '#86efac' : '#f87171' }}>
-                          {config.enable_content_analysis ? 'Enabled' : 'Disabled'}
-                        </span>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td style={{ color: '#64748b', fontSize: '0.8125rem' }}>Bulk Message Threshold</td>
-                      <td>
-                        <code style={{ color: '#a3e635', fontSize: '0.8125rem' }}>
-                          {config.bulk_message_threshold} msgs
-                        </code>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td style={{ color: '#64748b', fontSize: '0.8125rem' }}>Bulk Window</td>
-                      <td>
-                        <code style={{ color: '#a3e635', fontSize: '0.8125rem' }}>
-                          {config.bulk_message_window_sec}s
-                        </code>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-                <div style={{ marginTop: '1.25rem' }}>
-                  <div className="section-title" style={{ marginBottom: '0.75rem' }}>
-                    Detection Rules
-                  </div>
-                  {[
-                    { id: 'COMMS-001', name: 'Phishing Detection', tiers: 'T1–T3', active: true },
-                    { id: 'COMMS-002', name: 'Data Exfiltration', tiers: 'T1–T4', active: true },
-                  ].map((rule) => (
-                    <div
-                      key={rule.id}
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        padding: '0.5rem 0.75rem',
-                        background: '#0f172a',
-                        borderRadius: '6px',
-                        marginBottom: '0.5rem',
-                        border: '1px solid #1e293b',
-                      }}
-                    >
-                      <div>
-                        <div style={{ fontSize: '0.8125rem', color: '#f1f5f9' }}>{rule.name}</div>
-                        <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
-                          <code>{rule.id}</code> · tiers {rule.tiers}
-                        </div>
-                      </div>
-                      <span
-                        style={{
-                          fontSize: '0.65rem',
-                          fontWeight: 700,
-                          padding: '0.125rem 0.5rem',
-                          borderRadius: '9999px',
-                          background: '#14532d',
-                          color: '#86efac',
-                          border: '1px solid #166534',
-                        }}
-                      >
-                        ACTIVE
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
 
       {/* ─── Interception tab ─────────────────────────────────────────────── */}
       {tab === 'interception' && (

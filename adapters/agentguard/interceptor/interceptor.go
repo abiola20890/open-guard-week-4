@@ -157,22 +157,25 @@ func (i *AgentInterceptor) handleAction(w http.ResponseWriter, r *http.Request) 
 		})
 	}
 
-	// Quarantine on self-policy modification.
-	if containsViolation(result.Violations, "self_policy_modification") {
+	// Quarantine if required — triggered by self-policy modification or ≥3 simultaneous
+	// violations (multi-condition escalation). The decision is centralised in
+	// compliance.go; interceptor.go never inspects violation strings directly.
+	if result.ShouldQuarantine {
 		i.registry.Quarantine(req.AgentID)
 		i.publishEvent(ctx, &common.AgentEvent{
-			EventType:      "agent_quarantined",
-			AgentID:        req.AgentID,
-			AgentName:      profile.AgentName,
-			AgentType:      profile.AgentType,
-			ActionType:     req.ActionType,
-			PolicyMatch:    "deny",
-			Timestamp:      time.Now(),
-			Indicators:     result.Violations,
+			EventType:   "agent_quarantined",
+			AgentID:     req.AgentID,
+			AgentName:   profile.AgentName,
+			AgentType:   profile.AgentType,
+			ActionType:  req.ActionType,
+			PolicyMatch: "deny",
+			Timestamp:   time.Now(),
+			Indicators:  result.Violations,
 		})
 	}
 
-	// Multi-condition violation escalation.
+	// Multi-condition violation escalation event — emitted in addition to quarantine
+	// when ≥3 violations are detected simultaneously.
 	if result.ConditionsCount >= 3 {
 		i.publishEvent(ctx, &common.AgentEvent{
 			EventType:         "multi_condition_violation",

@@ -93,9 +93,20 @@ export default function Dashboard() {
 
   useSSE(sseUrl, handleLiveEvent);
 
+  // Parse a tier value that may be a string ("T0"–"T4") or a legacy number.
+  function parseTier(t: unknown): number | undefined {
+    if (typeof t === 'number') return t;
+    if (typeof t === 'string') {
+      if (/^T(\d)$/i.test(t)) return parseInt(t.slice(1), 10);
+      const n = parseInt(t, 10);
+      if (!isNaN(n)) return n;
+    }
+    return undefined;
+  }
+
   const tierCounts = [0, 1, 2, 3, 4].map((tier) => ({
     tier,
-    count: events?.events.filter((e) => e.tier === tier).length ?? 0,
+    count: events?.events.filter((e) => parseTier(e.tier) === tier).length ?? 0,
   }));
   const totalEvents = events?.events.length ?? 0;
 

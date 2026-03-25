@@ -120,31 +120,28 @@ func (s *Server) handleHostGuardStats(w http.ResponseWriter, r *http.Request) {
 		}
 		totalHostEvents++
 
-		// Count threat events (tier >= 2 or risk_score >= 50).
-		tier, _ := ev["tier"].(float64)
+		// Count threat events (tier >= T2 or risk_score >= 50).
+		// tier is a string ("T0"–"T4") set by the detect service — parseTierNum
+		// is defined in networkguard.go in the same package.
+		tierStr, _ := ev["tier"].(string)
+		if tierStr == "" {
+			tierStr = "T0"
+		}
 		riskScore, _ := ev["risk_score"].(float64)
-		if tier >= 2 || riskScore >= 50 {
+		if parseTierNum(tierStr) >= 2 || riskScore >= 50 {
 			threatEvents++
 		}
 
-		// Tier breakdown.
-		tierLabel := "T0"
-		switch int(tier) {
-		case 1:
-			tierLabel = "T1"
-		case 2:
-			tierLabel = "T2"
-		case 3:
-			tierLabel = "T3"
-		case 4:
-			tierLabel = "T4"
-		}
-		tierCounts[tierLabel]++
+		// Tier breakdown — tierStr is already the canonical label.
+		tierCounts[tierStr]++
 
-		// Unique hostname tracking.
-		source, _ := ev["source"].(string)
-		if source != "" {
-			hosts[source] = struct{}{}
+		// Unique hostname tracking — source is a map, not a bare string.
+		if src, ok := ev["source"].(map[string]interface{}); ok {
+			hostID, _ := src["host_id"].(string)
+			adapter, _ := src["adapter"].(string)
+			if key := adapter + ":" + hostID; key != ":" {
+				hosts[key] = struct{}{}
+			}
 		}
 
 		// Event-type counting.

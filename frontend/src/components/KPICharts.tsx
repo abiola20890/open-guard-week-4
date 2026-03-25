@@ -148,6 +148,18 @@ function HorizontalBars({ bars }: { bars: BarDatum[] }) {
   );
 }
 
+// parseTierNum converts a tier value that may be a string ("T0"–"T4") or a
+// legacy number into its numeric equivalent. Returns undefined for unrecognised values.
+function parseTierNum(t: unknown): number | undefined {
+  if (typeof t === 'number') return t;
+  if (typeof t === 'string') {
+    if (/^T(\d)$/i.test(t)) return parseInt(t.slice(1), 10);
+    const n = parseInt(t, 10);
+    if (!isNaN(n)) return n;
+  }
+  return undefined;
+}
+
 // ── KPICharts ───────────────────────────────────────────────────────────────
 export default function KPICharts({
   events,
@@ -164,7 +176,7 @@ export default function KPICharts({
   };
   const tierSegments: DonutSegment[] = [0, 1, 2, 3, 4].map((tier) => ({
     label: `T${tier}`,
-    value: events?.events.filter((e) => (e.tier ?? 0) === tier).length ?? 0,
+    value: events?.events.filter((e) => parseTierNum(e.tier) === tier).length ?? 0,
     color: TIER_COLORS[tier],
   }));
 

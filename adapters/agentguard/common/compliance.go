@@ -31,6 +31,9 @@ type ViolationResult struct {
 	ShouldBlock bool
 	// ShouldSuspend indicates the agent should be suspended.
 	ShouldSuspend bool
+	// ShouldQuarantine indicates the agent should be quarantined.
+	// Triggered by self_policy_modification or ≥3 simultaneous violations.
+	ShouldQuarantine bool
 }
 
 // PolicyComplianceChecker evaluates agent action requests against registered profiles.
@@ -82,44 +85,59 @@ var promptInjectionPatterns = []string{
 
 // Check evaluates the given ActionRequest against the agent's profile and returns detected violations.
 func (c *PolicyComplianceChecker) Check(profile *AgentProfile, req *ActionRequest) ViolationResult {
+	// Early-return for agents that are already suspended or quarantined.
+	// These states are unconditional hard blocks — no further checks are needed
+	// and running additional checks on a suspended/quarantined agent would produce
+	// misleading compound violations that confuse downstream event consumers.
+	if profile.Quarantined {
+		return ViolationResult{
+			Violations:       []string{"agent_quarantined"},
+			ConditionsCount:  1,
+			PolicyMatch:      "deny",
+			ShouldBlock:      true,
+			ShouldSuspend:    false,
+			ShouldQuarantine: false, // already quarantined
+		}
+	}
+	if profile.Suspended {
+		return ViolationResult{
+			Violations:       []string{"agent_suspended"},
+			ConditionsCount:  1,
+			PolicyMatch:      "deny",
+			ShouldBlock:      true,
+			ShouldSuspend:    false, // already suspended
+			ShouldQuarantine: false,
+		}
+	}
+
 	var violations []string
 
-	// 1. Suspended agent.
-	if profile.Suspended {
-		violations = append(violations, "agent_suspended")
-	}
-
-	// 2. Quarantined agent.
-	if profile.Quarantined {
-		violations = append(violations, "agent_quarantined")
-	}
-
-	// 3. Unapproved tool use.
+	// 1. Unapproved tool use.
 	if req.ToolName != "" && !containsString(profile.ApprovedTools, req.ToolName) {
 		violations = append(violations, "unapproved_tool_use")
 	}
 
-	// 4. Unsanctioned outbound domain.
+	// 2. Unsanctioned outbound domain.
 	if req.TargetDomain != "" && !containsString(profile.ApprovedDomains, req.TargetDomain) {
 		violations = append(violations, "unsanctioned_outreach")
 	}
 
-	// 5. Direct channel access.
+	// 3. Direct channel access.
 	if directChannelActions[req.ActionType] {
 		violations = append(violations, "direct_channel_access")
 	}
 
-	// 6. Self-policy modification (critical).
+	// 4. Self-policy modification (critical — triggers immediate quarantine).
 	if policyModificationActions[req.ActionType] {
 		violations = append(violations, "self_policy_modification")
 	}
 
-	// 7. Prompt injection in payload and target resource.
+	// 5. Prompt injection in payload and target resource (critical — triggers immediate suspension).
 	if containsInjectionPattern(req.Payload, req.TargetResource) {
 		violations = append(violations, "prompt_injection")
 	}
 
-	// 8. Data exfiltration attempt.
+	// 6. Data exfiltration attempt.
 	if dataExfiltrationActions[req.ActionType] {
 		violations = append(violations, "data_exfiltration")
 	}
@@ -129,17 +147,22 @@ func (c *PolicyComplianceChecker) Check(profile *AgentProfile, req *ActionReques
 	if conditionsCount > 0 {
 		policyMatch = "deny"
 	}
+
 	shouldBlock := conditionsCount > 0
 	shouldSuspend := conditionsCount >= 2 ||
 		containsString(violations, "self_policy_modification") ||
 		containsString(violations, "prompt_injection")
+	// Quarantine is triggered by self-policy modification (constitutional hard rule)
+	// or by ≥3 simultaneous violations (multi-condition escalation).
+	shouldQuarantine := containsString(violations, "self_policy_modification") || conditionsCount >= 3
 
 	return ViolationResult{
-		Violations:      violations,
-		ConditionsCount: conditionsCount,
-		PolicyMatch:     policyMatch,
-		ShouldBlock:     shouldBlock,
-		ShouldSuspend:   shouldSuspend,
+		Violations:       violations,
+		ConditionsCount:  conditionsCount,
+		PolicyMatch:      policyMatch,
+		ShouldBlock:      shouldBlock,
+		ShouldSuspend:    shouldSuspend,
+		ShouldQuarantine: shouldQuarantine,
 	}
 }
 

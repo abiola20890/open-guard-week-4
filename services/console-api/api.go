@@ -92,6 +92,9 @@ type Server struct {
 	// waSession manages the WhatsApp multi-device (QR-code) live session.
 	waSession *waSession
 
+	// tgSession manages the Telegram Bot API long-polling session.
+	tgSession *tgSession
+
 	// natsConn is the NATS connection used to publish live model-provider config
 	// updates to the model-gateway agent. Nil when NATSUrl is not configured.
 	natsConn         *nats.Conn
@@ -156,6 +159,7 @@ func NewServer(cfg Config, ledger *auditled.Ledger, events *EventStore, incident
 		modelGuard:       newModelGuardState(),
 		configStore:      newDomainConfigStore(),
 		waSession:        newWASession(cfg.NATSUrl, logger),
+		tgSession:        newTGSession(logger),
 		modelConfigTopic: cfg.ModelConfigTopic,
 	}
 	if s.modelConfigTopic == "" {
@@ -180,6 +184,9 @@ func (rw *responseWriter) WriteHeader(code int) {
 func (s *Server) Start(ctx context.Context) error {
 	if s.waSession != nil {
 		go s.waSession.Start(ctx)
+	}
+	if s.tgSession != nil {
+		go s.tgSession.Start(ctx)
 	}
 
 	// Connect to NATS for model-config publishing (best-effort — non-fatal).
@@ -225,6 +232,9 @@ func (s *Server) Stop(ctx context.Context) error {
 	if s.waSession != nil {
 		s.waSession.Stop()
 	}
+	if s.tgSession != nil {
+		s.tgSession.Stop()
+	}
 	if s.natsConn != nil {
 		s.natsConn.Drain() //nolint:errcheck
 		s.natsConn = nil
@@ -260,6 +270,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/commsguard/whatsapp/messages", s.handleWAMessages)
 	mux.HandleFunc("/api/v1/commsguard/whatsapp/connect", s.handleWAConnect)
 	mux.HandleFunc("/api/v1/commsguard/whatsapp/logout", s.handleWALogout)
+	mux.HandleFunc("/api/v1/commsguard/telegram/status", s.handleTGStatus)
+	mux.HandleFunc("/api/v1/commsguard/telegram/messages", s.handleTGMessages)
+	mux.HandleFunc("/api/v1/commsguard/telegram/connect", s.handleTGConnect)
+	mux.HandleFunc("/api/v1/commsguard/telegram/disconnect", s.handleTGDisconnect)
 	mux.HandleFunc("/api/v1/commsguard/stats", s.handleCommsGuardStats)
 	mux.HandleFunc("/api/v1/commsguard/events", s.handleCommsGuardEvents)
 	mux.HandleFunc("/api/v1/commsguard/channels", s.handleCommsGuardChannels)
