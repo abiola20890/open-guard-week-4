@@ -197,39 +197,40 @@ func (e *HostEvent) ToUnifiedEvent() ([]byte, error) {
 }
 
 // classifyEvent assigns severity, risk_score, and tier based on event type and indicators.
+// Tier boundaries follow the detect service: T0=0–19, T1=20–39, T2=40–59, T3=60–79, T4=80–100.
 func classifyEvent(e *HostEvent) (severity string, riskScore float64, tier string) {
 	// Indicator special-cases take priority over event type.
 	for _, ind := range e.Indicators {
 		switch ind {
 		case "critical_service_stopped":
-			return "critical", 95.0, "T3"
+			return "critical", 95.0, "T4"
 		case "suspicious_kernel_module":
-			return "critical", 95.0, "immediate"
+			return "critical", 95.0, "T4"
 		case "hidden_driver":
-			return "critical", 95.0, "immediate"
+			return "critical", 95.0, "T4"
 		case "usb_mass_storage_inserted":
-			return "high", 70.0, "T2"
+			return "high", 70.0, "T3"
 		case "usb_hid_inserted":
-			return "high", 70.0, "T2"
+			return "high", 70.0, "T3"
 		case "imds_abuse":
-			return "critical", 95.0, "immediate"
+			return "critical", 95.0, "T4"
 		case "secure_boot_disabled":
-			return "high", 70.0, "T2"
+			return "high", 70.0, "T3"
 		case "firmware_setup_mode":
-			return "critical", 95.0, "immediate"
+			return "critical", 95.0, "T4"
 		case "browser_remote_debugging_enabled":
-			return "high", 70.0, "T2"
+			return "high", 70.0, "T3"
 		case "browser_security_disabled":
-			return "high", 75.0, "T2"
+			return "high", 75.0, "T3"
 		}
 	}
 	switch e.EventType {
 	case "privilege_escalation":
-		return "high", 80.0, "T3"
+		return "high", 80.0, "T4"
 	case "process_anomaly", "suspicious_path":
 		return "medium", 50.0, "T2"
 	case "startup_item_added", "startup_item_modified":
-		return "high", 70.0, "T2"
+		return "high", 70.0, "T3"
 	case "resource_spike":
 		return "medium", 40.0, "T1"
 	case "process_created", "process_terminated":
@@ -237,11 +238,11 @@ func classifyEvent(e *HostEvent) (severity string, riskScore float64, tier strin
 	case "connection_established", "connection_closed":
 		return "info", 10.0, "T0"
 	case "suspicious_connection", "high_volume_connection":
-		return "high", 70.0, "T2"
+		return "high", 70.0, "T3"
 	case "hidden_process_detected":
-		return "critical", 90.0, "immediate"
+		return "critical", 90.0, "T4"
 	case "suspicious_file_access":
-		return "high", 70.0, "T2"
+		return "high", 70.0, "T3"
 	case "file_access", "file_modified", "file_created", "file_deleted":
 		return "medium", 40.0, "T1"
 	case "kernel_module_loaded", "kernel_module_unloaded",
@@ -256,7 +257,7 @@ func classifyEvent(e *HostEvent) (severity string, riskScore float64, tier strin
 	case "ssh_login":
 		return "medium", 40.0, "T1"
 	case "brute_force_attempt":
-		return "critical", 90.0, "immediate"
+		return "critical", 90.0, "T4"
 	case "dns_query":
 		return "info", 10.0, "T0"
 	case "dns_config_changed":
@@ -264,11 +265,11 @@ func classifyEvent(e *HostEvent) (severity string, riskScore float64, tier strin
 	case "ipc_shared_memory_created", "ipc_shared_memory_deleted":
 		return "low", 20.0, "T1"
 	case "suspicious_ipc", "suspicious_unix_socket", "suspicious_named_pipe":
-		return "high", 70.0, "T2"
+		return "high", 70.0, "T3"
 	case "named_pipe_created":
 		return "info", 10.0, "T0"
 	case "container_escape_attempt":
-		return "critical", 95.0, "immediate"
+		return "critical", 95.0, "T4"
 	case "privileged_container_process":
 		return "high", 75.0, "T3"
 	case "container_process_created", "container_started", "container_stopped":
@@ -279,21 +280,21 @@ func classifyEvent(e *HostEvent) (severity string, riskScore float64, tier strin
 	case "usb_device_removed":
 		return "info", 10.0, "T0"
 	case "usb_mass_storage_inserted":
-		return "high", 70.0, "T2"
+		return "high", 70.0, "T3"
 	case "usb_hid_inserted":
-		return "high", 65.0, "T2"
+		return "high", 65.0, "T3"
 	// eBPF syscall tracing events.
 	case "syscall_execve":
 		return "info", 15.0, "T0"
 	case "syscall_openat":
 		return "info", 10.0, "T0"
 	case "suspicious_syscall_sequence":
-		return "high", 75.0, "T2"
+		return "high", 75.0, "T3"
 	// Cloud metadata service events.
 	case "cloud_metadata_access":
 		return "info", 20.0, "T1"
 	case "suspicious_cloud_metadata_access":
-		return "critical", 90.0, "immediate"
+		return "critical", 90.0, "T4"
 	// Low-and-slow anomaly.
 	case "low_and_slow_anomaly":
 		return "medium", 55.0, "T2"
@@ -301,9 +302,9 @@ func classifyEvent(e *HostEvent) (severity string, riskScore float64, tier strin
 	case "secure_boot_status":
 		return "info", 10.0, "T0"
 	case "firmware_setup_mode":
-		return "critical", 95.0, "immediate"
+		return "critical", 95.0, "T4"
 	case "efi_variable_modified":
-		return "high", 75.0, "T2"
+		return "high", 75.0, "T3"
 	case "kernel_hardening_disabled":
 		return "medium", 50.0, "T2"
 	// Browser activity events.

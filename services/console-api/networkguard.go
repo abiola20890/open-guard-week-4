@@ -134,37 +134,31 @@ func (s *Server) handleNetworkGuardStats(w http.ResponseWriter, r *http.Request)
 	var threatEvents, totalNetEvents, blockedFlows int
 
 	for _, ev := range allEvents {
-		domain, _ := ev["domain"].(string)
-		if domain != "network" {
+		if !isNetworkEvent(ev) {
 			continue
 		}
 		totalNetEvents++
 
-		// Count threat events (tier >= 2 or risk_score >= 50).
-		tier, _ := ev["tier"].(float64)
+		// Count threat events (tier >= T2 or risk_score >= 50).
+		tierStr, _ := ev["tier"].(string)
 		riskScore, _ := ev["risk_score"].(float64)
-		if tier >= 2 || riskScore >= 50 {
+		if parseTierNum(tierStr) >= 2 || riskScore >= 50 {
 			threatEvents++
 		}
 
-		// Tier breakdown.
-		tierLabel := "T0"
-		switch int(tier) {
-		case 1:
-			tierLabel = "T1"
-		case 2:
-			tierLabel = "T2"
-		case 3:
-			tierLabel = "T3"
-		case 4:
-			tierLabel = "T4"
+		// Tier breakdown — tierStr is already the canonical label ("T0"…"T4").
+		if tierStr == "" {
+			tierStr = "T0"
 		}
-		tierCounts[tierLabel]++
+		tierCounts[tierStr]++
 
-		// Unique source tracking.
-		source, _ := ev["source"].(string)
-		if source != "" {
-			sources[source] = struct{}{}
+		// Unique source tracking — source is a map, not a bare string.
+		if src, ok := ev["source"].(map[string]interface{}); ok {
+			hostID, _ := src["host_id"].(string)
+			adapter, _ := src["adapter"].(string)
+			if key := adapter + ":" + hostID; key != ":" {
+				sources[key] = struct{}{}
+			}
 		}
 
 		meta, _ := ev["metadata"].(map[string]interface{})
@@ -254,14 +248,13 @@ func (s *Server) handleNetworkGuardEvents(w http.ResponseWriter, r *http.Request
 
 	var filtered []map[string]interface{}
 	for _, ev := range allEvents {
-		domain, _ := ev["domain"].(string)
-		if domain != "network" {
+		if !isNetworkEvent(ev) {
 			continue
 		}
 
 		if filterSourceIP != "" {
-			source, _ := ev["source"].(string)
-			if source != filterSourceIP {
+			sourceIP := extractSourceIP(ev)
+			if sourceIP != filterSourceIP {
 				continue
 			}
 		}
@@ -321,4 +314,75 @@ func (s *Server) handleNetworkGuardRules(w http.ResponseWriter, r *http.Request)
 		"rules": builtinNetRules,
 		"total": len(builtinNetRules),
 	})
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// networkEventTypes is the set of event_type values produced by HostGuard's
+// network monitors that are classified as network-domain events.
+var networkEventTypes = map[string]bool{
+	"connection_established":   true,
+	"connection_closed":        true,
+	"suspicious_connection":    true,
+	"high_volume_connection":   true,
+	"dns_query":                true,
+	"dns_config_changed":       true,
+	"port_scan":                true,
+	"c2_beaconing":             true,
+	"lateral_movement":         true,
+	"dns_tunneling":            true,
+	"protocol_anomaly":         true,
+	"geo_ip_anomaly":           true,
+	"network_data_exfiltration": true,
+}
+
+// isNetworkEvent returns true if the event belongs to the network monitoring
+// domain. It accepts events with domain="network" (future dedicated sensor) as
+// well as domain="host" events whose metadata event_type is network-related.
+func isNetworkEvent(ev map[string]interface{}) bool {
+	domain, _ := ev["domain"].(string)
+	if domain == "network" {
+		return true
+	}
+	if domain == "host" {
+		if meta, ok := ev["metadata"].(map[string]interface{}); ok {
+			et, _ := meta["event_type"].(string)
+			return networkEventTypes[et]
+		}
+	}
+	return false
+}
+
+// parseTierNum converts a tier string ("T0"…"T4") to its numeric equivalent.
+func parseTierNum(tier string) int {
+	switch tier {
+	case "T4":
+		return 4
+	case "T3":
+		return 3
+	case "T2":
+		return 2
+	case "T1":
+		return 1
+	default:
+		return 0
+	}
+}
+
+// extractSourceIP returns a best-effort source IP from the event's source map or metadata.
+func extractSourceIP(ev map[string]interface{}) string {
+	if src, ok := ev["source"].(map[string]interface{}); ok {
+		if ip, _ := src["ip"].(string); ip != "" {
+			return ip
+		}
+		if hostID, _ := src["host_id"].(string); hostID != "" {
+			return hostID
+		}
+	}
+	if meta, ok := ev["metadata"].(map[string]interface{}); ok {
+		if ip, _ := meta["source_ip"].(string); ip != "" {
+			return ip
+		}
+	}
+	return ""
 }

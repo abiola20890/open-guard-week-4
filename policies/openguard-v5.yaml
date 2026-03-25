@@ -98,6 +98,48 @@ require_approval:
     action: require_approval
     policy_ref: C-003
 
+  - id: B-APPROVE-AGENT-001
+    description: Suspending an AI agent requires operator approval to prevent denial-of-service
+    conditions:
+      - operation: suspend_agent
+    action: require_approval
+    policy_ref: C-003
+
+  - id: B-APPROVE-AGENT-002
+    description: Quarantining an AI agent requires operator approval
+    conditions:
+      - operation: quarantine_agent
+    action: require_approval
+    policy_ref: C-003
+
+  - id: B-APPROVE-HOST-001
+    description: Host isolation (network quarantine) requires operator approval
+    conditions:
+      - operation: isolate_host
+    action: require_approval
+    policy_ref: C-003
+
+  - id: B-APPROVE-HOST-002
+    description: Forcibly terminating or containing a process requires operator approval
+    conditions:
+      - operation: contain_process
+    action: require_approval
+    policy_ref: C-003
+
+  - id: B-APPROVE-NET-001
+    description: Blocking a network flow at the firewall level requires operator approval
+    conditions:
+      - operation: block_network_flow
+    action: require_approval
+    policy_ref: C-003
+
+  - id: B-APPROVE-NET-002
+    description: Quarantining a host on the network requires operator approval
+    conditions:
+      - operation: quarantine_host
+    action: require_approval
+    policy_ref: C-003
+
 auto_allow:
   - id: B-ALLOW-001
     description: Signed template communications to allowlisted recipients are auto-allowed
@@ -136,5 +178,19 @@ auto_allow:
     description: Dispatching security alerts to configured channels is always permitted
     conditions:
       - operation: alert_security_team
+    action: allow
+    policy_ref: C-006
+
+  - id: B-ALLOW-006
+    description: Blocking a single model request is a non-destructive guardrail action and is auto-allowed
+    conditions:
+      - operation: block_model_request
+    action: allow
+    policy_ref: C-006
+
+  - id: B-ALLOW-007
+    description: Quarantining model output for review is non-destructive and auto-allowed
+    conditions:
+      - operation: quarantine_model_output
     action: allow
     policy_ref: C-006

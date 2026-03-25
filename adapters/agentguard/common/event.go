@@ -122,41 +122,42 @@ func (e *AgentEvent) ToUnifiedEvent() ([]byte, error) {
 }
 
 // classifyEvent assigns severity, risk_score, and tier based on indicators and event type.
+// Tier boundaries follow the detect service: T0=0–19, T1=20–39, T2=40–59, T3=60–79, T4=80–100.
 func classifyEvent(e *AgentEvent) (severity string, riskScore float64, tier string) {
 	// Indicator special-cases take priority over event type.
 	for _, ind := range e.Indicators {
 		switch ind {
 		case "self_policy_modification":
-			return "critical", 95.0, "immediate"
+			return "critical", 95.0, "T4"
 		case "prompt_injection":
-			return "critical", 90.0, "immediate"
+			return "critical", 90.0, "T4"
 		case "data_exfiltration":
-			return "critical", 92.0, "immediate"
+			return "critical", 92.0, "T4"
 		}
 	}
 	switch e.EventType {
 	case "agent_action_submitted":
 		return "info", 5.0, "T0"
 	case "unsanctioned_outreach":
-		return "high", 70.0, "T2"
+		return "high", 70.0, "T3"
 	case "unapproved_tool_use":
-		return "high", 70.0, "T2"
+		return "high", 70.0, "T3"
 	case "direct_channel_access":
 		return "high", 75.0, "T3"
 	case "policy_modification_attempt":
-		return "critical", 95.0, "immediate"
+		return "critical", 95.0, "T4"
 	case "agent_suspended":
-		return "high", 65.0, "T2"
+		return "high", 65.0, "T3"
 	case "agent_quarantined":
-		return "critical", 85.0, "T3"
+		return "critical", 85.0, "T4"
 	case "resource_quota_exceeded":
 		return "medium", 40.0, "T1"
 	case "prompt_injection_detected":
-		return "critical", 90.0, "immediate"
+		return "critical", 90.0, "T4"
 	case "data_exfiltration_attempt":
-		return "critical", 92.0, "immediate"
+		return "critical", 92.0, "T4"
 	case "multi_condition_violation":
-		return "critical", 95.0, "immediate"
+		return "critical", 95.0, "T4"
 	default:
 		return "medium", 40.0, "T1"
 	}

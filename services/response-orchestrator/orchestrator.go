@@ -326,17 +326,56 @@ func (o *Orchestrator) executeEmergencyLockdown(ctx context.Context, eventID str
 
 // selectAction derives a domain-and-tier-appropriate proposed action from the event.
 // This eliminates the need for callers to hard-code "auto_monitor" for every event
-// and ensures that higher-severity comms events propose meaningful actions.
+// and ensures that higher-severity events propose meaningful, domain-specific actions.
 func selectAction(event map[string]interface{}) string {
 	tier, _ := event["tier"].(string)
 	domain, _ := event["domain"].(string)
 
-	if domain == "comms" {
+	switch domain {
+	case "comms":
 		switch tier {
 		case "T3", "T4":
 			return "block_sender"
 		case "T2":
 			return "quarantine_message"
+		case "T1":
+			return "alert_security_team"
+		}
+	case "agent":
+		switch tier {
+		case "T3", "T4":
+			return "suspend_agent"
+		case "T2":
+			return "quarantine_agent"
+		case "T1":
+			return "alert_security_team"
+		}
+	case "host":
+		switch tier {
+		case "T4":
+			return "isolate_host"
+		case "T3":
+			return "contain_process"
+		case "T2":
+			return "contain_process"
+		case "T1":
+			return "alert_security_team"
+		}
+	case "model":
+		switch tier {
+		case "T3", "T4":
+			return "block_model_request"
+		case "T2":
+			return "quarantine_model_output"
+		case "T1":
+			return "alert_security_team"
+		}
+	case "network":
+		switch tier {
+		case "T3", "T4":
+			return "block_network_flow"
+		case "T2":
+			return "quarantine_host"
 		case "T1":
 			return "alert_security_team"
 		}

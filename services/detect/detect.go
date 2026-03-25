@@ -154,7 +154,7 @@ func (s *Service) scoreComponents(event map[string]interface{}) RiskComponents {
 	switch event["domain"] {
 	case "agent", "model":
 		c.AnomalyScore = 15
-	case "host":
+	case "host", "network":
 		c.AnomalyScore = 10
 	case "comms":
 		c.AnomalyScore = 8
