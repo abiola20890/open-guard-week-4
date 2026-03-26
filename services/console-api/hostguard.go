@@ -159,26 +159,6 @@ func (s *Server) handleHostGuardStats(w http.ResponseWriter, r *http.Request) {
 		eventTypes = append(eventTypes, hostEventTypeStat{Type: t, Count: c})
 	}
 
-	// Seed demo breakdown when no real host events exist.
-	if len(eventTypes) == 0 {
-		eventTypes = []hostEventTypeStat{
-			{Type: "process_anomaly", Count: 12},
-			{Type: "privilege_escalation", Count: 5},
-			{Type: "network_anomaly", Count: 8},
-			{Type: "startup_item_added", Count: 3},
-			{Type: "file_access", Count: 21},
-			{Type: "user_login", Count: 34},
-			{Type: "dns_query", Count: 17},
-			{Type: "process_created", Count: 42},
-		}
-		threatEvents = 25
-		totalHostEvents = 142
-		hosts["workstation-01"] = struct{}{}
-		hosts["server-prod-02"] = struct{}{}
-		hosts["laptop-dev-03"] = struct{}{}
-		tierCounts = map[string]int{"T0": 63, "T1": 19, "T2": 20, "T3": 5, "T4": 0}
-	}
-
 	activeRules := 0
 	for _, rule := range builtinHostRules {
 		if rule.Enabled {

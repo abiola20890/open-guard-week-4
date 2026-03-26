@@ -183,29 +183,6 @@ func (s *Server) handleNetworkGuardStats(w http.ResponseWriter, r *http.Request)
 		eventTypes = append(eventTypes, netEventTypeStat{Type: t, Count: c})
 	}
 
-	// Seed demo data when no real network events exist.
-	if len(eventTypes) == 0 {
-		eventTypes = []netEventTypeStat{
-			{Type: "port_scan", Count: 28},
-			{Type: "c2_beaconing", Count: 4},
-			{Type: "lateral_movement", Count: 7},
-			{Type: "dns_tunneling", Count: 3},
-			{Type: "data_exfiltration", Count: 2},
-			{Type: "protocol_anomaly", Count: 11},
-			{Type: "geo_ip_anomaly", Count: 9},
-			{Type: "remote_access", Count: 18},
-		}
-		threatEvents = 16
-		blockedFlows = 12
-		totalNetEvents = 82
-		sources["10.0.1.45"] = struct{}{}
-		sources["10.0.2.12"] = struct{}{}
-		sources["192.168.0.32"] = struct{}{}
-		sources["172.16.5.88"] = struct{}{}
-		protoBreakdown = map[string]int{"TCP": 51, "UDP": 17, "DNS": 8, "ICMP": 6}
-		tierCounts = map[string]int{"T0": 36, "T1": 14, "T2": 20, "T3": 9, "T4": 3}
-	}
-
 	activeRules := 0
 	for _, rule := range builtinNetRules {
 		if rule.Enabled {

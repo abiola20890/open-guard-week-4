@@ -188,6 +188,12 @@ func NewServer(cfg Config, ledger *auditled.Ledger, events *EventStore, incident
 		s.modelConfigTopic = "openguard.modelguard.config"
 	}
 	s.activeProvider.Store(provider)
+
+	// Pre-populate the ModelGuard call store from the persisted audit log so
+	// that stats and audit views reflect real AI enrichment history immediately
+	// on startup, without waiting for new live calls.
+	s.modelGuard.calls.loadAuditFile("audit/model-gateway-audit.ndjson")
+
 	return s
 }
 
@@ -247,6 +253,11 @@ func (s *Server) Start(ctx context.Context) error {
 			s.logger.Error("console api: server error", zap.Error(err))
 		}
 	}()
+
+	// Watch the EventStore for real domain="agent" events so the AgentGuard
+	// store stays in sync without requiring demo data.
+	go s.watchAgentEvents(ctx)
+
 	return nil
 }
 
@@ -1085,6 +1096,9 @@ func (s *Server) SetBaselineEngine(e *baseline.Engine) {
 // current in-memory users (the default admin account).
 func (s *Server) SetDB(db *sql.DB) {
 	s.db = db
+	if db == nil {
+		return
+	}
 	users, err := LoadUsersFromSQLite(db)
 	if err != nil || len(users) == 0 {
 		// Seed the DB with the current in-memory defaults.

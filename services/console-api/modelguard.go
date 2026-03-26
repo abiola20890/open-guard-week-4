@@ -6,6 +6,7 @@ package consoleapi
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -95,6 +96,57 @@ func newModelCallStore() *modelCallStore {
 	return &modelCallStore{
 		entries: []modelCallEntry{},
 		maxSize: 500,
+	}
+}
+
+// modelAuditRecord matches the NDJSON schema written by model-gateway/audit.
+type modelAuditRecord struct {
+	CallID          string `json:"call_id"`
+	Timestamp       string `json:"timestamp"`
+	AgentID         string `json:"agent_id"`
+	Provider        string `json:"provider"`
+	InputHash       string `json:"input_hash"`
+	OutputHash      string `json:"output_hash"`
+	LatencyMS       int64  `json:"latency_ms"`
+	TokenCount      int    `json:"token_count"`
+	RiskLevel       string `json:"risk_level"`
+	RoutingStrategy string `json:"routing_strategy"`
+}
+
+// loadAuditFile reads a model-gateway NDJSON audit file and pre-populates the
+// store so that stats and audit tables reflect real AI enrichment history on
+// startup without waiting for new live calls.
+func (s *modelCallStore) loadAuditFile(path string) {
+	if path == "" {
+		path = "audit/model-gateway-audit.ndjson"
+	}
+	f, err := os.Open(path) //nolint:gosec
+	if err != nil {
+		return // file does not exist yet — not an error
+	}
+	defer f.Close()
+	dec := json.NewDecoder(f)
+	for dec.More() {
+		var rec modelAuditRecord
+		if err := dec.Decode(&rec); err != nil {
+			break
+		}
+		ts, _ := time.Parse(time.RFC3339, rec.Timestamp)
+		if ts.IsZero() {
+			ts = time.Now().UTC()
+		}
+		s.add(modelCallEntry{
+			CallID:          rec.CallID,
+			Timestamp:       ts,
+			AgentID:         rec.AgentID,
+			Provider:        rec.Provider,
+			RiskLevel:       rec.RiskLevel,
+			RoutingStrategy: rec.RoutingStrategy,
+			LatencyMS:       rec.LatencyMS,
+			TokenCount:      rec.TokenCount,
+			InputHash:       rec.InputHash,
+			OutputHash:      rec.OutputHash,
+		})
 	}
 }
 

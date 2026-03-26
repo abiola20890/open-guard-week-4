@@ -4,6 +4,7 @@
 package consoleapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -118,99 +119,15 @@ type agentRecord struct {
 	ActionCount     int       `json:"action_count"`
 }
 
-// agentStore is a thread-safe in-memory registry of agentRecords, seeded with
-// some representative demo agents so the UI is immediately useful.
+// agentStore is a thread-safe in-memory registry of agentRecords populated by
+// real agent registrations via POST /api/v1/agentguard/agents.
 type agentStore struct {
 	mu     sync.RWMutex
 	agents map[string]*agentRecord
 }
 
 func newAgentStore() *agentStore {
-	now := time.Now().UTC()
-	s := &agentStore{agents: make(map[string]*agentRecord)}
-
-	// Seed realistic demo agents.
-	demos := []*agentRecord{
-		{
-			AgentID:         "agent-llm-001",
-			AgentName:       "CodingAssistant",
-			AgentType:       "code_agent",
-			ApprovedTools:   []string{"bash", "read_file", "write_file", "search"},
-			ApprovedDomains: []string{"api.github.com", "pypi.org"},
-			TokenQuota:      100000,
-			CallQuota:       500,
-			Suspended:       false,
-			Quarantined:     false,
-			RegisteredAt:    now.Add(-72 * time.Hour),
-			LastActivityAt:  now.Add(-5 * time.Minute),
-			ThreatCount:     2,
-			ActionCount:     341,
-		},
-		{
-			AgentID:         "agent-auto-002",
-			AgentName:       "DataPipelineBot",
-			AgentType:       "automation_bot",
-			ApprovedTools:   []string{"fetch_data", "transform", "load_db"},
-			ApprovedDomains: []string{"internal-data.example.com"},
-			TokenQuota:      50000,
-			CallQuota:       1000,
-			Suspended:       true,
-			Quarantined:     false,
-			RegisteredAt:    now.Add(-48 * time.Hour),
-			LastActivityAt:  now.Add(-30 * time.Minute),
-			ThreatCount:     7,
-			ActionCount:     892,
-		},
-		{
-			AgentID:         "agent-llm-003",
-			AgentName:       "ResearchAgent",
-			AgentType:       "llm_assistant",
-			ApprovedTools:   []string{"web_search", "summarize"},
-			ApprovedDomains: []string{"google.com", "wikipedia.org", "arxiv.org"},
-			TokenQuota:      200000,
-			CallQuota:       200,
-			Suspended:       false,
-			Quarantined:     false,
-			RegisteredAt:    now.Add(-24 * time.Hour),
-			LastActivityAt:  now.Add(-2 * time.Minute),
-			ThreatCount:     0,
-			ActionCount:     127,
-		},
-		{
-			AgentID:         "agent-deploy-004",
-			AgentName:       "DeploymentAgent",
-			AgentType:       "automation_bot",
-			ApprovedTools:   []string{"kubectl", "helm", "docker"},
-			ApprovedDomains: []string{"registry.example.com", "k8s.example.com"},
-			TokenQuota:      0,
-			CallQuota:       0,
-			Suspended:       false,
-			Quarantined:     true,
-			RegisteredAt:    now.Add(-12 * time.Hour),
-			LastActivityAt:  now.Add(-1 * time.Hour),
-			ThreatCount:     3,
-			ActionCount:     55,
-		},
-		{
-			AgentID:         "agent-comms-005",
-			AgentName:       "NotificationBot",
-			AgentType:       "automation_bot",
-			ApprovedTools:   []string{"send_email", "post_slack"},
-			ApprovedDomains: []string{"slack.com", "smtp.example.com"},
-			TokenQuota:      10000,
-			CallQuota:       100,
-			Suspended:       false,
-			Quarantined:     false,
-			RegisteredAt:    now.Add(-6 * time.Hour),
-			LastActivityAt:  now.Add(-10 * time.Minute),
-			ThreatCount:     1,
-			ActionCount:     48,
-		},
-	}
-	for _, d := range demos {
-		s.agents[d.AgentID] = d
-	}
-	return s
+	return &agentStore{agents: make(map[string]*agentRecord)}
 }
 
 func (s *agentStore) list() []*agentRecord {
@@ -263,6 +180,31 @@ func (s *agentStore) quarantine(id string) bool {
 	return true
 }
 
+// register adds or replaces an agent record.
+func (s *agentStore) register(rec *agentRecord) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.agents[rec.AgentID] = rec
+}
+
+// incThreat increments the threat counter for an agent.
+func (s *agentStore) incThreat(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if a, ok := s.agents[id]; ok {
+		a.ThreatCount++
+	}
+}
+
+// incAction increments the action counter for an agent.
+func (s *agentStore) incAction(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if a, ok := s.agents[id]; ok {
+		a.ActionCount++
+	}
+}
+
 // ─── Stats helpers ────────────────────────────────────────────────────────────
 
 // agentEventTypeStat holds a count for a named event type.
@@ -305,16 +247,26 @@ func (s *Server) handleAgentGuardStats(w http.ResponseWriter, r *http.Request) {
 	}
 	active := len(agents) - suspended - quarantined
 
-	// Derive event-type breakdown and action count from the real event store.
-	typeCounts := map[string]int{}
+	// Derive threats and actions by summing the counters on each registered agent
+	// record. These are incremented in real-time as events arrive (via incThreat
+	// and incAction), so they are always consistent with the per-agent cards in
+	// the UI.
+	threats := 0
 	actions := 0
+	for _, a := range agents {
+		threats += a.ThreatCount
+		actions += a.ActionCount
+	}
+
+	// Derive the event-type breakdown from the live event store (domain="agent").
+	// This is the only stat that requires the ingest pipeline to be running.
+	typeCounts := map[string]int{}
 	allEvents, _ := s.events.List(1, 5000)
 	for _, ev := range allEvents {
 		domain, _ := ev["domain"].(string)
 		if domain != "agent" {
 			continue
 		}
-		actions++
 		meta, _ := ev["metadata"].(map[string]interface{})
 		if meta == nil {
 			continue
@@ -322,18 +274,6 @@ func (s *Server) handleAgentGuardStats(w http.ResponseWriter, r *http.Request) {
 		et, _ := meta["event_type"].(string)
 		if et != "" && et != "agent_action_submitted" {
 			typeCounts[et]++
-		}
-	}
-
-	// Derive threat count from real incidents whose matched rules include any AGENT-* rule.
-	threats := 0
-	allIncidents, _ := s.incidents.List(1, 10000)
-	for _, inc := range allIncidents {
-		for _, rule := range inc.MatchedRules {
-			if strings.HasPrefix(rule, "AGENT-") {
-				threats++
-				break
-			}
 		}
 	}
 
@@ -355,17 +295,41 @@ func (s *Server) handleAgentGuardStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleAgentGuardAgents handles GET /api/v1/agentguard/agents — list all agents.
+// handleAgentGuardAgents handles GET and POST /api/v1/agentguard/agents.
+//
+// GET  returns the full list of registered agents.
+// POST registers a new agent (or replaces an existing record with the same agent_id).
 func (s *Server) handleAgentGuardAgents(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		agents := s.agentGuardStore.list()
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"agents": agents,
+			"total":  len(agents),
+		})
+
+	case http.MethodPost:
+		var rec agentRecord
+		if err := json.NewDecoder(r.Body).Decode(&rec); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+			return
+		}
+		if rec.AgentID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent_id is required"})
+			return
+		}
+		if rec.RegisteredAt.IsZero() {
+			rec.RegisteredAt = time.Now().UTC()
+		}
+		s.agentGuardStore.register(&rec)
+		writeJSON(w, http.StatusCreated, map[string]interface{}{
+			"registered": true,
+			"agent_id":   rec.AgentID,
+		})
+
+	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
 	}
-	agents := s.agentGuardStore.list()
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"agents": agents,
-		"total":  len(agents),
-	})
 }
 
 // handleAgentGuardAgent handles GET /api/v1/agentguard/agents/{id}.
@@ -553,4 +517,62 @@ func parseIntFromStr(s string, out *int) (int, error) {
 	}
 	*out = n
 	return n, nil
+}
+
+// watchAgentEvents subscribes to the EventStore and keeps the AgentGuard
+// store up-to-date with live data from the ingest pipeline. For every
+// domain="agent" event:
+//   - unknown agents are auto-registered from the event's metadata fields,
+//   - ActionCount is incremented for every action event,
+//   - ThreatCount is incremented for every violation event (anything other
+//     than the baseline "agent_action_submitted" type).
+//
+// This eliminates the need for demo data: as soon as real AgentGuard sensors
+// start publishing events, the console registry and stats reflect live state.
+func (s *Server) watchAgentEvents(ctx context.Context) {
+	ch := s.events.Subscribe()
+	defer s.events.Unsubscribe(ch)
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				return
+			}
+			domain, _ := ev["domain"].(string)
+			if domain != "agent" {
+				continue
+			}
+			meta, _ := ev["metadata"].(map[string]interface{})
+			if meta == nil {
+				continue
+			}
+			agentID, _ := meta["agent_id"].(string)
+			if agentID == "" {
+				continue
+			}
+			// Auto-register the agent the first time we see it.
+			if _, exists := s.agentGuardStore.get(agentID); !exists {
+				agentName, _ := meta["agent_name"].(string)
+				agentType, _ := meta["agent_type"].(string)
+				if agentName == "" {
+					agentName = agentID
+				}
+				s.agentGuardStore.register(&agentRecord{
+					AgentID:      agentID,
+					AgentName:    agentName,
+					AgentType:    agentType,
+					RegisteredAt: time.Now().UTC(),
+				})
+			}
+			// Every agent event counts as one action.
+			s.agentGuardStore.incAction(agentID)
+			// Violation events (not the baseline submission) count as threats.
+			et, _ := meta["event_type"].(string)
+			if et != "" && et != "agent_action_submitted" {
+				s.agentGuardStore.incThreat(agentID)
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
 }
