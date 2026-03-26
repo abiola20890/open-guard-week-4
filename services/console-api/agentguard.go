@@ -294,7 +294,7 @@ func (s *Server) handleAgentGuardStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	agents := s.agentGuardStore.list()
-	var suspended, quarantined, threats, actions int
+	var suspended, quarantined int
 	for _, a := range agents {
 		if a.Suspended {
 			suspended++
@@ -302,19 +302,19 @@ func (s *Server) handleAgentGuardStats(w http.ResponseWriter, r *http.Request) {
 		if a.Quarantined {
 			quarantined++
 		}
-		threats += a.ThreatCount
-		actions += a.ActionCount
 	}
 	active := len(agents) - suspended - quarantined
 
-	// Derive event-type breakdown from the global event store (domain="agent").
+	// Derive event-type breakdown and action count from the real event store.
 	typeCounts := map[string]int{}
+	actions := 0
 	allEvents, _ := s.events.List(1, 5000)
 	for _, ev := range allEvents {
 		domain, _ := ev["domain"].(string)
 		if domain != "agent" {
 			continue
 		}
+		actions++
 		meta, _ := ev["metadata"].(map[string]interface{})
 		if meta == nil {
 			continue
@@ -325,19 +325,21 @@ func (s *Server) handleAgentGuardStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Derive threat count from real incidents whose matched rules include any AGENT-* rule.
+	threats := 0
+	allIncidents, _ := s.incidents.List(1, 10000)
+	for _, inc := range allIncidents {
+		for _, rule := range inc.MatchedRules {
+			if strings.HasPrefix(rule, "AGENT-") {
+				threats++
+				break
+			}
+		}
+	}
+
 	eventTypes := make([]agentEventTypeStat, 0, len(typeCounts))
 	for t, c := range typeCounts {
 		eventTypes = append(eventTypes, agentEventTypeStat{Type: t, Count: c})
-	}
-	// If no real events, provide demo breakdown.
-	if len(eventTypes) == 0 {
-		eventTypes = []agentEventTypeStat{
-			{Type: "unapproved_tool_use", Count: 5},
-			{Type: "unsanctioned_outreach", Count: 4},
-			{Type: "prompt_injection", Count: 2},
-			{Type: "self_policy_modification", Count: 1},
-			{Type: "data_exfiltration", Count: 1},
-		}
 	}
 
 	writeJSON(w, http.StatusOK, agentStatsResponse{

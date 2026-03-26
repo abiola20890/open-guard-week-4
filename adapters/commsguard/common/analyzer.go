@@ -43,31 +43,36 @@ func (a *ThreatAnalyzer) WithCrossChannelTracker(tracker *CrossChannelTracker) *
 	return a
 }
 
+// localFallback is the pattern-based enricher used when no AI model is configured.
+var localFallback Enricher = &LocalEnricher{}
+
 // Analyze inspects a CommsEvent and returns a slice of threat indicator strings.
 //
-// The AI model provider is the sole source of threat classification. The event
-// is forwarded to the model-gateway for semantic analysis; all indicators
-// originate there. Cross-channel correlation then checks whether the same
-// threat fingerprint has appeared across multiple channels within the
-// look-back window.
+// The AI model provider is the primary source of threat classification. When
+// the model-gateway is not configured or unreachable, analysis falls back to
+// the LocalEnricher which applies pattern-based detection (phishing lures,
+// credential-harvesting phrases, suspicious URLs). Cross-channel correlation
+// supplements the primary enricher's output.
 func (a *ThreatAnalyzer) Analyze(event *CommsEvent) []string {
 	var indicators []string
 
-	// ── AI model provider ──────────────────────────────────────────────────────
-	if a.enricher != nil {
-		novel, assessment := a.enricher.Enrich(context.Background(), event, nil)
-		indicators = append(indicators, novel...)
-		if assessment != nil {
-			if event.RawData == nil {
-				event.RawData = make(map[string]interface{})
-			}
-			event.RawData["ai_risk_level"] = assessment.RiskLevel
-			event.RawData["ai_confidence"] = assessment.Confidence
-			event.RawData["ai_summary"] = assessment.Summary
-			event.RawData["ai_provider"] = assessment.ProviderName
-			event.RawData["ai_recommended_action"] = assessment.RecommendedAction
-			event.RawData["ai_indicators"] = assessment.Indicators
+	// ── Primary enricher (AI model-gateway) or local fallback ─────────────────
+	enricher := a.enricher
+	if enricher == nil {
+		enricher = localFallback
+	}
+	novel, assessment := enricher.Enrich(context.Background(), event, nil)
+	indicators = append(indicators, novel...)
+	if assessment != nil {
+		if event.RawData == nil {
+			event.RawData = make(map[string]interface{})
 		}
+		event.RawData["ai_risk_level"] = assessment.RiskLevel
+		event.RawData["ai_confidence"] = assessment.Confidence
+		event.RawData["ai_summary"] = assessment.Summary
+		event.RawData["ai_provider"] = assessment.ProviderName
+		event.RawData["ai_recommended_action"] = assessment.RecommendedAction
+		event.RawData["ai_indicators"] = assessment.Indicators
 	}
 
 	// ── Cross-channel correlation ──────────────────────────────────────────────

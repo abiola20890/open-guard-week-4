@@ -84,8 +84,7 @@ type modelCallEntry struct {
 	OutputHash      string    `json:"output_hash"`
 }
 
-// modelCallStore is an in-memory ring-buffer of recent model call audit entries,
-// seeded with representative demo data so the UI is immediately useful.
+// modelCallStore is an in-memory ring-buffer of recent model call audit entries.
 type modelCallStore struct {
 	mu      sync.RWMutex
 	entries []modelCallEntry
@@ -93,75 +92,8 @@ type modelCallStore struct {
 }
 
 func newModelCallStore() *modelCallStore {
-	now := time.Now().UTC()
-	demos := []modelCallEntry{
-		{
-			CallID: "mc-001", AgentID: "agent-llm-001", Provider: "openai-codex",
-			RiskLevel: "low", RoutingStrategy: "single", LatencyMS: 342, TokenCount: 1200,
-			Blocked: false, InputHash: "a1b2c3d4", OutputHash: "e5f6a7b8",
-			Timestamp: now.Add(-2 * time.Minute),
-		},
-		{
-			CallID: "mc-002", AgentID: "agent-auto-002", Provider: "anthropic-claude",
-			RiskLevel: "medium", RoutingStrategy: "fallback", LatencyMS: 780, TokenCount: 2400,
-			Blocked: false, InputHash: "b2c3d4e5", OutputHash: "f6a7b8c9",
-			Redactions: []string{"pii_email"},
-			Timestamp: now.Add(-5 * time.Minute),
-		},
-		{
-			CallID: "mc-003", AgentID: "agent-llm-003", Provider: "google-gemini",
-			RiskLevel: "high", RoutingStrategy: "quorum", LatencyMS: 1430, TokenCount: 3100,
-			Blocked: false, InputHash: "c3d4e5f6", OutputHash: "a7b8c9d0",
-			Timestamp: now.Add(-9 * time.Minute),
-		},
-		{
-			CallID: "mc-004", AgentID: "agent-deploy-004", Provider: "openai-codex",
-			RiskLevel: "critical", RoutingStrategy: "quorum", LatencyMS: 1920, TokenCount: 4200,
-			Blocked: true, InputHash: "d4e5f6a7", OutputHash: "",
-			Redactions: []string{"injection_detected"},
-			Timestamp: now.Add(-15 * time.Minute),
-		},
-		{
-			CallID: "mc-005", AgentID: "agent-comms-005", Provider: "anthropic-claude",
-			RiskLevel: "low", RoutingStrategy: "single", LatencyMS: 265, TokenCount: 980,
-			Blocked: false, InputHash: "e5f6a7b8", OutputHash: "b9c0d1e2",
-			Timestamp: now.Add(-22 * time.Minute),
-		},
-		{
-			CallID: "mc-006", AgentID: "agent-llm-001", Provider: "openai-codex",
-			RiskLevel: "medium", RoutingStrategy: "single", LatencyMS: 410, TokenCount: 1650,
-			Blocked: false, InputHash: "f6a7b8c9", OutputHash: "c0d1e2f3",
-			Redactions: []string{"pii_phone"},
-			Timestamp: now.Add(-31 * time.Minute),
-		},
-		{
-			CallID: "mc-007", AgentID: "agent-auto-002", Provider: "google-gemini",
-			RiskLevel: "low", RoutingStrategy: "single", LatencyMS: 290, TokenCount: 870,
-			Blocked: false, InputHash: "a7b8c9d0", OutputHash: "d1e2f3a4",
-			Timestamp: now.Add(-45 * time.Minute),
-		},
-		{
-			CallID: "mc-008", AgentID: "agent-llm-003", Provider: "openai-codex",
-			RiskLevel: "high", RoutingStrategy: "quorum", LatencyMS: 1760, TokenCount: 3800,
-			Blocked: false, InputHash: "b8c9d0e1", OutputHash: "e2f3a4b5",
-			Timestamp: now.Add(-58 * time.Minute),
-		},
-		{
-			CallID: "mc-009", AgentID: "agent-comms-005", Provider: "anthropic-claude",
-			RiskLevel: "low", RoutingStrategy: "single", LatencyMS: 310, TokenCount: 1100,
-			Blocked: false, InputHash: "c9d0e1f2", OutputHash: "f3a4b5c6",
-			Timestamp: now.Add(-72 * time.Minute),
-		},
-		{
-			CallID: "mc-010", AgentID: "agent-deploy-004", Provider: "openai-codex",
-			RiskLevel: "critical", RoutingStrategy: "quorum", LatencyMS: 2100, TokenCount: 5000,
-			Blocked: true, InputHash: "d0e1f2a3", OutputHash: "",
-			Redactions: []string{"credential_redacted", "injection_detected"},
-			Timestamp: now.Add(-90 * time.Minute),
-		},
-	}
 	return &modelCallStore{
-		entries: demos,
+		entries: []modelCallEntry{},
 		maxSize: 500,
 	}
 }
@@ -342,7 +274,7 @@ func (s *Server) handleModelGuardStats(w http.ResponseWriter, r *http.Request) {
 		BlockedCalls:      blocked,
 		AvgLatencyMS:      avgLatency,
 		AvgTokenCount:     avgTokens,
-		AvgConfidence:     0.82, // synthetic: real value comes from ledger in production
+		AvgConfidence:     0.0, // populated by model-gateway-agent once integrated
 		ProviderBreakdown: toSlice(provMap),
 		StrategyBreakdown: toSlice(stratMap),
 		RiskBreakdown:     toSlice(riskMap),

@@ -43,13 +43,42 @@ func containsIndicator(indicators []string, target string) bool {
 	return false
 }
 
-// TestNoEnricherNoContentIndicators verifies that without an AI model configured,
-// Analyze returns no content-based indicators for any message.
-func TestNoEnricherNoContentIndicators(t *testing.T) {
+// TestLocalFallbackDetectsPhishing verifies that without an AI model configured,
+// Analyze falls back to LocalEnricher and detects obvious phishing messages.
+func TestLocalFallbackDetectsPhishing(t *testing.T) {
 	a := newAnalyzer()
 	indicators := a.Analyze(makeEvent("Click here to claim your reward http://evil.xyz"))
+	if !containsIndicator(indicators, "phishing") {
+		t.Errorf("expected phishing indicator from local fallback, got %v", indicators)
+	}
+}
+
+// TestLocalFallbackDetectsCredentialHarvesting verifies the local fallback
+// catches credential-harvesting phrases without a model enricher.
+func TestLocalFallbackDetectsCredentialHarvesting(t *testing.T) {
+	a := newAnalyzer()
+	indicators := a.Analyze(makeEvent("Please enter your password to verify your account"))
+	if !containsIndicator(indicators, "credential_harvesting") {
+		t.Errorf("expected credential_harvesting from local fallback, got %v", indicators)
+	}
+}
+
+// TestLocalFallbackCleanMessage verifies that benign messages produce no indicators.
+func TestLocalFallbackCleanMessage(t *testing.T) {
+	a := newAnalyzer()
+	indicators := a.Analyze(makeEvent("Hey, can we reschedule tomorrow's meeting?"))
 	if len(indicators) != 0 {
-		t.Errorf("expected no indicators without enricher, got %v", indicators)
+		t.Errorf("expected no indicators for benign message, got %v", indicators)
+	}
+}
+
+// TestLocalFallbackWritesRawData verifies the local enricher assessment is stored on the event.
+func TestLocalFallbackWritesRawData(t *testing.T) {
+	a := newAnalyzer()
+	event := makeEvent("Click here to claim your reward http://evil.xyz")
+	a.Analyze(event)
+	if event.RawData["ai_provider"] != "local-enricher" {
+		t.Errorf("expected ai_provider=local-enricher, got %v", event.RawData["ai_provider"])
 	}
 }
 

@@ -162,7 +162,7 @@ func Run(ctx context.Context, nc *nats.Conn, cfg Config, logger *zap.Logger) (fu
 
 	// ── Subscribe to live config updates ─────────────────────────────────────
 	configSub, configErr := nc.Subscribe(cfg.ConfigTopic, func(msg *nats.Msg) {
-		handleConfigUpdate(msg, &activeRouter, logger)
+		handleConfigUpdate(msg, &activeRouter, strategy, logger)
 	})
 	if configErr != nil {
 		logger.Warn("model-gateway: failed to subscribe to config topic — live provider updates disabled",
@@ -267,20 +267,75 @@ func buildProviders(strategy, providerName, openAIKey, anthropicKey, geminiKey s
 		}
 		return providers, primary
 	}
+
+	// For single/fallback strategies: use the requested provider when its key is
+	// available; fall back to whichever provider has a key configured so that a
+	// mis-matched OPENGUARD_PROVIDER/key combination doesn't produce 401 errors.
+	type candidate struct {
+		name string
+		key  string
+		build func() mg.ModelProvider
+	}
+	candidates := []candidate{
+		{name: providerName}, // placeholder — resolved below
+	}
 	switch providerName {
 	case "claude":
-		p := claude.NewClaudeProvider(claude.Config{APIKey: anthropicKey}, logger)
-		return []mg.ModelProvider{p}, p.ProviderName()
+		candidates = []candidate{
+			{name: "claude", key: anthropicKey, build: func() mg.ModelProvider {
+				return claude.NewClaudeProvider(claude.Config{APIKey: anthropicKey}, logger)
+			}},
+			{name: "codex", key: openAIKey, build: func() mg.ModelProvider {
+				return codex.NewCodexProvider(codex.Config{APIKey: openAIKey}, logger)
+			}},
+			{name: "gemini", key: geminiKey, build: func() mg.ModelProvider {
+				return gemini.NewGeminiProvider(gemini.Config{APIKey: geminiKey}, logger)
+			}},
+		}
 	case "gemini":
-		p := gemini.NewGeminiProvider(gemini.Config{APIKey: geminiKey}, logger)
-		return []mg.ModelProvider{p}, p.ProviderName()
+		candidates = []candidate{
+			{name: "gemini", key: geminiKey, build: func() mg.ModelProvider {
+				return gemini.NewGeminiProvider(gemini.Config{APIKey: geminiKey}, logger)
+			}},
+			{name: "codex", key: openAIKey, build: func() mg.ModelProvider {
+				return codex.NewCodexProvider(codex.Config{APIKey: openAIKey}, logger)
+			}},
+			{name: "claude", key: anthropicKey, build: func() mg.ModelProvider {
+				return claude.NewClaudeProvider(claude.Config{APIKey: anthropicKey}, logger)
+			}},
+		}
 	default: // "codex"
-		p := codex.NewCodexProvider(codex.Config{APIKey: openAIKey}, logger)
-		return []mg.ModelProvider{p}, p.ProviderName()
+		candidates = []candidate{
+			{name: "codex", key: openAIKey, build: func() mg.ModelProvider {
+				return codex.NewCodexProvider(codex.Config{APIKey: openAIKey}, logger)
+			}},
+			{name: "claude", key: anthropicKey, build: func() mg.ModelProvider {
+				return claude.NewClaudeProvider(claude.Config{APIKey: anthropicKey}, logger)
+			}},
+			{name: "gemini", key: geminiKey, build: func() mg.ModelProvider {
+				return gemini.NewGeminiProvider(gemini.Config{APIKey: geminiKey}, logger)
+			}},
+		}
 	}
+
+	for _, c := range candidates {
+		if c.key != "" {
+			if c.name != providerName {
+				logger.Warn("model-gateway: requested provider has no API key — falling back",
+					zap.String("requested", providerName),
+					zap.String("fallback", c.name),
+				)
+			}
+			p := c.build()
+			return []mg.ModelProvider{p}, p.ProviderName()
+		}
+	}
+	// Should not be reached — Run() already guards against all-empty keys.
+	p := codex.NewCodexProvider(codex.Config{APIKey: openAIKey}, logger)
+	return []mg.ModelProvider{p}, p.ProviderName()
 }
 
-func handleConfigUpdate(msg *nats.Msg, activeRouter *atomic.Pointer[routing.Router], logger *zap.Logger) {
+func handleConfigUpdate(msg *nats.Msg, activeRouter *atomic.Pointer[routing.Router], strategy string, logger *zap.Logger) {
 	var update modelConfigUpdate
 	if err := json.Unmarshal(msg.Data, &update); err != nil {
 		logger.Warn("model-gateway: invalid config update — ignoring", zap.Error(err))
@@ -307,7 +362,8 @@ func handleConfigUpdate(msg *nats.Msg, activeRouter *atomic.Pointer[routing.Rout
 	newRouter := routing.NewRouter([]mg.ModelProvider{p}, routing.Config{PrimaryProviderIndex: 0}, logger)
 	activeRouter.Store(newRouter)
 	logger.Info("model-gateway: hot-swapped to provider from Model Settings",
-		zap.String("provider", update.Provider))
+		zap.String("provider", update.Provider),
+		zap.String("strategy", strategy))
 }
 
 func handleMessage(

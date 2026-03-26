@@ -11,3 +11,28 @@ agents:
     approved_tools:
       - "read_hr_database"
       - "schedule_meeting"
+  - id: "agent-llm-001"
+    approved_tools:
+      - "read_file"
+      - "write_file"
+      - "search_code"
+      - "run_tests"
+  - id: "agent-auto-002"
+    approved_tools:
+      - "read_database"
+      - "write_database"
+      - "call_api"
+  - id: "agent-llm-003"
+    approved_tools:
+      - "search_web"
+      - "read_file"
+      - "summarize"
+  - id: "agent-deploy-004"
+    approved_tools:
+      - "deploy_artifact"
+      - "read_config"
+      - "call_api"
+  - id: "agent-comms-005"
+    approved_tools:
+      - "send_notification"
+      - "read_contacts"
