@@ -150,7 +150,7 @@ export default function Dashboard() {
         <div className="card stat-card">
           <div className="stat-value">
             {health ? (
-              <span className={`badge badge-${health.status === 'ok' ? 'ok' : 'error'}`}>
+              <span className={`badge badge-${{ ok: 'ok', degraded: 'degraded' }[health.status] ?? 'error'}`}>
                 {health.status}
               </span>
             ) : (

@@ -5,6 +5,7 @@ package consoleapi
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -243,34 +244,74 @@ var builtinProviders = []struct{ id, name string }{
 	{"google-gemini", "Google Gemini 1.5 Pro"},
 }
 
-// modelGuardProviderHealth synthesises health entries. When the active provider
-// matches, it is considered reachable (assumed live via NATS); others reflect
-// reachability based on whether credentials are stored.
+// providerEndpoints maps provider IDs to their API host:port for TCP probing.
+var providerEndpoints = map[string]string{
+	"openai-codex":     "api.openai.com:443",
+	"anthropic-claude": "api.anthropic.com:443",
+	"google-gemini":    "generativelanguage.googleapis.com:443",
+}
+
+// dialLatencyMS measures real TCP connect latency to the given host:port.
+// Returns 0 when the connection fails or times out within 2 seconds.
+func dialLatencyMS(addr string) int64 {
+	start := time.Now()
+	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		return 0
+	}
+	conn.Close() //nolint:errcheck
+	return time.Since(start).Milliseconds()
+}
+
+// modelGuardProviderHealth synthesises health entries. Healthy status is based
+// on credential presence or active selection. TCP latency to each provider's
+// API endpoint is measured concurrently with a 2-second timeout.
 func (s *Server) modelGuardProviderHealth() []providerHealthEntry {
 	active := s.activeProvider.Load().(string)
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	entries := make([]providerHealthEntry, 0, len(builtinProviders))
-	for _, p := range builtinProviders {
+	entries := make([]providerHealthEntry, len(builtinProviders))
+	for i, p := range builtinProviders {
 		_, credOK := s.userCreds.Load(credKey("admin", p.id))
 		healthy := (p.id == active) || credOK
-		latency := int64(0)
 		errMsg := ""
-		if healthy {
-			// Simulated check latency — in production this would ping the provider.
-			latency = 120 + int64(len(p.id)*7)
-		} else {
+		if !healthy {
 			errMsg = "no credentials configured"
 		}
-		entries = append(entries, providerHealthEntry{
+		entries[i] = providerHealthEntry{
 			ID:          p.id,
 			Name:        p.name,
 			Healthy:     healthy,
-			LatencyMS:   latency,
+			LatencyMS:   0,
 			LastChecked: now,
 			Error:       errMsg,
-		})
+		}
 	}
+
+	// Probe provider endpoints concurrently — only for healthy (credentialed) entries.
+	type probe struct {
+		idx     int
+		latency int64
+	}
+	results := make(chan probe, len(builtinProviders))
+	for i, e := range entries {
+		if !e.Healthy {
+			results <- probe{i, 0}
+			continue
+		}
+		go func(idx int, id string) {
+			var lat int64
+			if ep, ok := providerEndpoints[id]; ok {
+				lat = dialLatencyMS(ep)
+			}
+			results <- probe{idx, lat}
+		}(i, e.ID)
+	}
+	for range builtinProviders {
+		p := <-results
+		entries[p.idx].LatencyMS = p.latency
+	}
+
 	return entries
 }
 

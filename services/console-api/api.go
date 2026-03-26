@@ -501,13 +501,43 @@ func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"username": newUser})
 }
 
-// handleHealth responds to GET /health with a 200 OK.
+// handleHealth responds to GET /health with real subsystem status.
+// status is "ok" when all configured subsystems are healthy, "degraded" when
+// a non-fatal subsystem (NATS) is unavailable.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": "5.0.0"})
+
+	status := "ok"
+	subsystems := map[string]string{}
+
+	// NATS connectivity — degraded but not fatal when down.
+	if s.natsConn != nil {
+		if s.natsConn.IsConnected() {
+			subsystems["nats"] = "connected"
+		} else {
+			subsystems["nats"] = s.natsConn.Status().String()
+			status = "degraded"
+		}
+	} else {
+		subsystems["nats"] = "not_configured"
+	}
+
+	// EventStore — report live event count.
+	_, evTotal := s.events.List(1, 1)
+	subsystems["event_store"] = fmt.Sprintf("%d events", evTotal)
+
+	// IncidentStore — report live incident count.
+	_, incTotal := s.incidents.List(1, 1)
+	subsystems["incident_store"] = fmt.Sprintf("%d incidents", incTotal)
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":     status,
+		"version":    "5.0.0",
+		"subsystems": subsystems,
+	})
 }
 
 // handleMetrics responds to GET /metrics using the Prometheus registry.

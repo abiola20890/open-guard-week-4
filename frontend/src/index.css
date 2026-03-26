@@ -113,6 +113,7 @@ button:disabled {
 .badge-t3 { background: #ea580c; color: #ffedd5; }
 .badge-t4 { background: #dc2626; color: #fee2e2; }
 .badge-ok { background: #15803d; color: #dcfce7; }
+.badge-degraded { background: #92400e; color: #fef3c7; }
 .badge-error { background: #991b1b; color: #fee2e2; }
 
 .empty-state {
