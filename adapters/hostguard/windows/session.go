@@ -12,7 +12,7 @@ import (
 	"unsafe"
 
 	common "github.com/DiniMuhd7/openguard/adapters/hostguard/common"
-	"github.com/StackExchange/wmi"
+	// "github.com/StackExchange/wmi"
 	"go.uber.org/zap"
 	"golang.org/x/sys/windows"
 )
